@@ -110,6 +110,7 @@ if __name__ == "__main__":
     parser.add_argument("--export_mesh", action="store_true")
     parser.add_argument("--grid_size", type=int, default=512)
     parser.add_argument("--mesh_level", type=float, default=0.5)
+    parser.add_argument("--distortion_loss", action="store_true", help="punish floaters and background through distortion loss")
     args = parser.parse_args()
 
     render_n_samples = 1024
@@ -209,7 +210,7 @@ if __name__ == "__main__":
                 pixels = data["pixels"]
 
                 # rendering
-                rgb, acc, depth, _, _, _, _, _ = render_image(
+                rgb, acc, depth, _, _ = render_image(
                     radiance_field,
                     occupancy_grid,
                     rays,
@@ -223,7 +224,6 @@ if __name__ == "__main__":
                     alpha_thre=alpha_thre,
                     # test options
                     test_chunk_size=args.test_chunk_size,
-                    require_weights=False,
                 )
                 mse = F.mse_loss(rgb, pixels)
                 psnr = -10.0 * torch.log(mse) / np.log(10.0)
@@ -297,7 +297,7 @@ if __name__ == "__main__":
             occupancy_grid.every_n_step(step=step, occ_eval_fn=occ_eval_fn)
 
             # render
-            rgb, acc, depth, n_rendering_samples, depth_loss = render_image(
+            rgb, acc, depth, n_rendering_samples, extra_loss = render_image(
                 radiance_field,
                 occupancy_grid,
                 rays,
@@ -309,6 +309,7 @@ if __name__ == "__main__":
                 render_bkgd=render_bkgd,
                 cone_angle=args.cone_angle,
                 alpha_thre=alpha_thre,
+                distortion_loss = args.distortion_loss
             )
             if n_rendering_samples == 0:
                 print("skipped!")
@@ -326,13 +327,16 @@ if __name__ == "__main__":
             # compute loss
             loss = F.smooth_l1_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
 
+            if args.distortion_loss:
+                loss += extra_loss * 0.0000001
+
             optimizer.zero_grad()
             # do not unscale it because we are using Adam.
             grad_scaler.scale(loss).backward()
             optimizer.step()
             scheduler.step()
 
-            if step % 1000 == 0:
+            if step % 10000 == 0:
                 elapsed_time = time.time() - tic
                 loss = F.mse_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
                 print(
@@ -355,7 +359,7 @@ if __name__ == "__main__":
                         pixels = data["pixels"]
 
                         # rendering
-                        rgb, acc, depth, _ = render_image(
+                        rgb, acc, depth, _, _ = render_image(
                             radiance_field,
                             occupancy_grid,
                             rays,

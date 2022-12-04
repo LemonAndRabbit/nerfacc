@@ -23,6 +23,7 @@ def rendering(
     rgb_alpha_fn: Optional[Callable] = None,
     # rendering options
     render_bkgd: Optional[torch.Tensor] = None,
+    requires_weight: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Render the rays through the radience field defined by `rgb_sigma_fn`.
 
@@ -126,7 +127,10 @@ def rendering(
     if render_bkgd is not None:
         colors = colors + render_bkgd * (1.0 - opacities)
 
-    return colors, opacities, depths
+    if requires_weight == True:
+        return colors, opacities, depths, weights    
+    else:
+        return colors, opacities, depths, None
 
 
 def accumulate_along_rays(

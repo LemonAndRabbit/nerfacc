@@ -35,6 +35,7 @@ def render_image(
     test_chunk_size: int = 8192,
     # only useful for dnerf
     timestamps: Optional[torch.Tensor] = None,
+    distortion_loss: bool = False,
 ):
     """Render the pixels of an image."""
     rays_shape = rays.origins.shape
@@ -83,6 +84,8 @@ def render_image(
         if radiance_field.training
         else test_chunk_size
     )
+    extra_loss = 0
+
     for i in range(0, num_rays, chunk):
         chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
         ray_indices, t_starts, t_ends = ray_marching(
@@ -98,16 +101,25 @@ def render_image(
             cone_angle=cone_angle,
             alpha_thre=alpha_thre,
         )
-        rgb, opacity, depth = rendering(
+        rgb, opacity, depth, weights = rendering(
             t_starts,
             t_ends,
             ray_indices,
             n_rays=chunk_rays.origins.shape[0],
             rgb_sigma_fn=rgb_sigma_fn,
             render_bkgd=render_bkgd,
+            requires_weight=distortion_loss,
         )
         chunk_results = [rgb, opacity, depth, len(t_starts)]
         results.append(chunk_results)
+
+        if distortion_loss:
+            with torch.no_grad():
+                dis_mids = abs((t_starts+t_ends)/2.0 - (depth/(opacity+0.1))[ray_indices.long()])
+
+            extra_loss += (weights * dis_mids).sum()
+            # print(extra_loss)
+    
     colors, opacities, depths, n_rendering_samples = [
         torch.cat(r, dim=0) if isinstance(r[0], torch.Tensor) else r
         for r in zip(*results)
@@ -117,6 +129,7 @@ def render_image(
         opacities.view((*rays_shape[:-1], -1)),
         depths.view((*rays_shape[:-1], -1)),
         sum(n_rendering_samples),
+        extra_loss
     )
 
 
