@@ -80,6 +80,8 @@ class NGPradianceField(torch.nn.Module):
         geo_feat_dim: int = 15,
         n_levels: int = 16,
         log2_hashmap_size: int = 19,
+        head_dim: int = 64,
+        head_layer: int = 2,
     ) -> None:
         super().__init__()
         if not isinstance(aabb, torch.Tensor):
@@ -89,6 +91,8 @@ class NGPradianceField(torch.nn.Module):
         self.use_viewdirs = use_viewdirs
         self.density_activation = density_activation
         self.unbounded = unbounded
+        self.head_dim = head_dim
+        self.head_layer = head_layer
 
         self.geo_feat_dim = geo_feat_dim
         per_level_scale = 1.4472692012786865
@@ -143,8 +147,8 @@ class NGPradianceField(torch.nn.Module):
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
                     "output_activation": "Sigmoid",
-                    "n_neurons": 64,
-                    "n_hidden_layers": 2,
+                    "n_neurons": self.head_dim,
+                    "n_hidden_layers": self.head_layer,
                 },
             )
 

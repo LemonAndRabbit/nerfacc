@@ -106,11 +106,17 @@ if __name__ == "__main__":
     )
     parser.add_argument("--cone_angle", type=float, default=0.0)
     parser.add_argument("--save_path", type=str, default=None)
+    parser.add_argument("--get_initial_nerf", action="store_true")
     parser.add_argument("--load_path", type=str, default=None)
     parser.add_argument("--export_mesh", action="store_true")
     parser.add_argument("--grid_size", type=int, default=512)
     parser.add_argument("--mesh_level", type=float, default=0.5)
     parser.add_argument("--distortion_loss", action="store_true", help="punish floaters and background through distortion loss")
+    parser.add_argument("--color_bkgd_aug", type=str, default="white")
+    parser.add_argument("--head_layer", type=int, default=2)
+    parser.add_argument("--head_dim", type=int, default=64)
+    parser.add_argument("--geo_feat_dim", type=int, default=15)
+    parser.add_argument("--max_steps", type=int, default=20000)
     args = parser.parse_args()
 
     render_n_samples = 1024
@@ -132,6 +138,7 @@ if __name__ == "__main__":
         data_root_fp = "/data3/dataset_nerf/nerf_synthetic"
         target_sample_batch_size = 1 << 18
         grid_resolution = 128
+        train_dataset_kwargs = {"color_bkgd_aug": args.color_bkgd_aug}
 
     train_dataset = SubjectLoader(
         subject_id=args.scene,
@@ -235,12 +242,20 @@ if __name__ == "__main__":
 
 
     # setup the radiance field we want to train.
-    max_steps = 20000
+    max_steps = args.max_steps
     grad_scaler = torch.cuda.amp.GradScaler(2**10)
     radiance_field = NGPradianceField(
         aabb=args.aabb,
         unbounded=args.unbounded,
+        head_layer=args.head_layer,
+        head_dim=args.head_dim,
+        geo_feat_dim=args.geo_feat_dim,
     ).to(device)
+
+    if args.get_initial_nerf:
+        torch.save(radiance_field, "initial_nerf.pt")
+        exit()
+
     optimizer = torch.optim.Adam(
         radiance_field.parameters(), lr=1e-2, eps=1e-15
     )
