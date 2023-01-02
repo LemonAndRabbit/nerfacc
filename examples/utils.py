@@ -115,7 +115,7 @@ def render_image(
 
         if distortion_loss:
             with torch.no_grad():
-                dis_mids = abs((t_starts+t_ends)/2.0 - (depth/(opacity+0.1))[ray_indices.long()])
+                dis_mids = abs((t_starts+t_ends)/2.0 - (depth/(opacity+0.001))[ray_indices.long()])
 
             extra_loss += (weights * dis_mids).sum()
             # print(extra_loss)

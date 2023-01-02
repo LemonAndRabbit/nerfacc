@@ -109,6 +109,7 @@ if __name__ == "__main__":
     parser.add_argument("--get_initial_nerf", action="store_true")
     parser.add_argument("--load_path", type=str, default=None)
     parser.add_argument("--export_mesh", action="store_true")
+    parser.add_argument("--export_image", action='store_true')
     parser.add_argument("--grid_size", type=int, default=512)
     parser.add_argument("--mesh_level", type=float, default=0.5)
     parser.add_argument("--distortion_loss", action="store_true", help="punish floaters and background through distortion loss")
@@ -235,6 +236,16 @@ if __name__ == "__main__":
                 mse = F.mse_loss(rgb, pixels)
                 psnr = -10.0 * torch.log(mse) / np.log(10.0)
                 psnrs.append(psnr.item())
+
+                if args.export_image:
+                    norm_depth = (depth/(acc+0.1))
+                    norm_depth = norm_depth/norm_depth.max()
+                    imageio.imwrite("/".join([args.save_path, "img%d_depth.jpg" % (i,)]), (norm_depth * 255).detach().cpu().numpy().astype(np.uint8))
+                    imageio.imwrite("/".join([args.save_path, "img%d_acc.jpg" % (i,)]), (acc * 255).detach().cpu().numpy().astype(np.uint8))
+                    imageio.imwrite("/".join([args.save_path, "img%d_orig.jpg" % (i,)]), (pixels * 255).cpu().numpy().astype(np.uint8))
+                    imageio.imwrite("/".join([args.save_path, "img%d_pred.jpg" % (i,)]), (rgb * 255).detach().cpu().numpy().astype(np.uint8))
+                    imageio.imwrite("/".join([args.save_path, "img%d_error.jpg" % (i,)]), (abs(rgb-pixels) * 255).detach().cpu().numpy().astype(np.uint8))
+
         psnr_avg = sum(psnrs) / len(psnrs)
         print(f"evaluation: {psnr_avg}")
 
