@@ -114,6 +114,8 @@ if __name__ == "__main__":
     parser.add_argument("--mesh_level", type=float, default=0.5)
     parser.add_argument("--distortion_loss", action="store_true", help="punish floaters and background through distortion loss")
     parser.add_argument("--color_bkgd_aug", type=str, default="white")
+    parser.add_argument("--base_layer", type=int, default=1)
+    parser.add_argument("--base_dim", type=int, default=64)
     parser.add_argument("--head_layer", type=int, default=2)
     parser.add_argument("--head_dim", type=int, default=64)
     parser.add_argument("--geo_feat_dim", type=int, default=15)
@@ -258,6 +260,8 @@ if __name__ == "__main__":
     radiance_field = NGPradianceField(
         aabb=args.aabb,
         unbounded=args.unbounded,
+        base_layer=args.base_layer,
+        base_dim=args.base_dim,
         head_layer=args.head_layer,
         head_dim=args.head_dim,
         geo_feat_dim=args.geo_feat_dim,
