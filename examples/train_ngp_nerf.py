@@ -4,44 +4,65 @@ Copyright (c) 2022 Ruilong Li, UC Berkeley.
 
 import argparse
 import math
-import os
+import os.path
 import time
 
 import imageio
+import pandas as pd
 import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
+
+from nerfacc import ContractionType, OccupancyGrid
 from radiance_fields.ngp import NGPradianceField
 from utils import render_image, set_random_seed, convert_sdf_samples_to_ply
 
-from nerfacc import ContractionType, OccupancyGrid
-from nerfacc.pack import unpack_info
 
 @torch.no_grad()
-def export_mesh(radiance_field: NGPradianceField, grid_size=[512, 512, 512], device="cuda:0", render_step_size=1e-2, save_path=None, level=0.05):
-    samples = torch.stack(torch.meshgrid(
-        torch.linspace(0, 1, grid_size[0]),
-        torch.linspace(0, 1, grid_size[1]),
-        torch.linspace(0, 1, grid_size[2]),
-    ), -1)
+def export_mesh(
+    radiance_field: NGPradianceField,
+    grid_size=[512, 512, 512],
+    device="cuda:0",
+    render_step_size=1e-2,
+    save_path=None,
+    level=0.05,
+):
+    samples = torch.stack(
+        torch.meshgrid(
+            torch.linspace(0, 1, grid_size[0]),
+            torch.linspace(0, 1, grid_size[1]),
+            torch.linspace(0, 1, grid_size[2]),
+        ),
+        -1,
+    )
 
-    dense_xyz = (1-samples)*radiance_field.aabb[:3].cpu() + samples*radiance_field.aabb[3:].cpu()
+    dense_xyz = (1 - samples) * radiance_field.aabb[
+        :3
+    ].cpu() + samples * radiance_field.aabb[3:].cpu()
 
-    alpha = torch.zeros_like(dense_xyz[...,0], device='cpu')
+    alpha = torch.zeros_like(dense_xyz[..., 0], device="cpu")
     for i in tqdm(range(grid_size[0]), desc="Extracting Alpha Field"):
-        for j in range(grid_size[1]//128):
-            for k in range(grid_size[2]//128):
-                query_position = dense_xyz[i, j*128:(j+1)*128, k*128:(k+1)*128]
-                density = radiance_field.query_density(query_position.to(device).view(-1,3))
-                alphas = (1 - torch.exp(-density*render_step_size).view(query_position.shape[:-1]))
-                alpha[i, j*128:(j+1)*128, k*128:(k+1)*128] = alphas.cpu()
-    
+        for j in range(grid_size[1] // 128):
+            for k in range(grid_size[2] // 128):
+                query_position = dense_xyz[
+                    i, j * 128 : (j + 1) * 128, k * 128 : (k + 1) * 128
+                ]
+                density = radiance_field.query_density(
+                    query_position.to(device).view(-1, 3)
+                )
+                alphas = 1 - torch.exp(-density * render_step_size).view(
+                    query_position.shape[:-1]
+                )
+                alpha[
+                    i, j * 128 : (j + 1) * 128, k * 128 : (k + 1) * 128
+                ] = alphas.cpu()
+
     print("Mean Alpha: %f" % torch.mean(alpha).item())
     print("Max Alpha: %f" % torch.max(alpha).item())
 
     if save_path is not None:
-        aabb = radiance_field.aabb.view((2,3)).cpu()
+        aabb = radiance_field.aabb.view((2, 3)).cpu()
         convert_sdf_samples_to_ply(alpha, save_path, bbox=aabb, level=level)
 
 
@@ -104,15 +125,20 @@ if __name__ == "__main__":
         action="store_true",
         help="whether to automatically compute the aabb",
     )
+    parser.add_argument("--grid_search", action="store_true")
     parser.add_argument("--cone_angle", type=float, default=0.0)
     parser.add_argument("--save_path", type=str, default=None)
     parser.add_argument("--get_initial_nerf", action="store_true")
     parser.add_argument("--load_path", type=str, default=None)
     parser.add_argument("--export_mesh", action="store_true")
-    parser.add_argument("--export_image", action='store_true')
+    parser.add_argument("--export_image", action="store_true")
     parser.add_argument("--grid_size", type=int, default=512)
     parser.add_argument("--mesh_level", type=float, default=0.5)
-    parser.add_argument("--distortion_loss", action="store_true", help="punish floaters and background through distortion loss")
+    parser.add_argument(
+        "--distortion_loss",
+        action="store_true",
+        help="punish floaters and background through distortion loss",
+    )
     parser.add_argument("--color_bkgd_aug", type=str, default="white")
     parser.add_argument("--base_layer", type=int, default=1)
     parser.add_argument("--base_dim", type=int, default=64)
@@ -124,7 +150,7 @@ if __name__ == "__main__":
 
     render_n_samples = 1024
 
-    # setup the dataset
+    # set up the dataset
     train_dataset_kwargs = {}
     test_dataset_kwargs = {}
     if args.unbounded:
@@ -138,7 +164,7 @@ if __name__ == "__main__":
     else:
         from datasets.nerf_synthetic import SubjectLoader
 
-        data_root_fp = "/data3/dataset_nerf/nerf_synthetic"
+        data_root_fp = "/home/huaizhi_qu/workspace/nerf_synthetic"
         target_sample_batch_size = 1 << 18
         grid_resolution = 128
         train_dataset_kwargs = {"color_bkgd_aug": args.color_bkgd_aug}
@@ -167,15 +193,15 @@ if __name__ == "__main__":
     test_dataset.K = test_dataset.K.to(device)
 
     if args.auto_aabb:
-        camera_locs = torch.cat(
-            [train_dataset.camtoworlds, test_dataset.camtoworlds]
-        )[:, :3, -1]
+        camera_locs = torch.cat([train_dataset.camtoworlds, test_dataset.camtoworlds])[
+            :, :3, -1
+        ]
         args.aabb = torch.cat(
             [camera_locs.min(dim=0).values, camera_locs.max(dim=0).values]
         ).tolist()
         print("Using auto aabb", args.aabb)
 
-    # setup the scene bounding box.
+    # set up the scene bounding box.
     if args.unbounded:
         print("Using unbounded rendering")
         contraction_type = ContractionType.UN_BOUNDED_SPHERE
@@ -191,9 +217,7 @@ if __name__ == "__main__":
         near_plane = None
         far_plane = None
         render_step_size = (
-            (scene_aabb[3:] - scene_aabb[:3]).max()
-            * math.sqrt(3)
-            / render_n_samples
+            (scene_aabb[3:] - scene_aabb[:3]).max() * math.sqrt(3) / render_n_samples
         ).item()
         alpha_thre = 0.0
 
@@ -202,13 +226,18 @@ if __name__ == "__main__":
         radiance_field = torch.load(args.load_path + "/model.pt")
         occupancy_grid = torch.load(args.load_path + "/occgrid.pt")
 
-        print(radiance_field)
+        # print(radiance_field)
 
         radiance_field.eval()
 
-        # export mesh and only export mesh        
+        # export mesh and only export mesh
         if args.export_mesh:
-            export_mesh(radiance_field, save_path=args.load_path+"/export.ply", level=args.mesh_level, grid_size=[args.grid_size]*3)
+            export_mesh(
+                radiance_field,
+                save_path=args.load_path + "/export.ply",
+                level=args.mesh_level,
+                grid_size=[args.grid_size] * 3,
+            )
             exit()
 
         psnrs = []
@@ -240,21 +269,39 @@ if __name__ == "__main__":
                 psnrs.append(psnr.item())
 
                 if args.export_image:
-                    norm_depth = (depth/(acc+0.1))
-                    norm_depth = norm_depth/norm_depth.max()
-                    imageio.imwrite("/".join([args.save_path, "img%d_depth.jpg" % (i,)]), (norm_depth * 255).detach().cpu().numpy().astype(np.uint8))
-                    imageio.imwrite("/".join([args.save_path, "img%d_acc.jpg" % (i,)]), (acc * 255).detach().cpu().numpy().astype(np.uint8))
-                    imageio.imwrite("/".join([args.save_path, "img%d_orig.jpg" % (i,)]), (pixels * 255).cpu().numpy().astype(np.uint8))
-                    imageio.imwrite("/".join([args.save_path, "img%d_pred.jpg" % (i,)]), (rgb * 255).detach().cpu().numpy().astype(np.uint8))
-                    imageio.imwrite("/".join([args.save_path, "img%d_error.jpg" % (i,)]), (abs(rgb-pixels) * 255).detach().cpu().numpy().astype(np.uint8))
+                    norm_depth = depth / (acc + 0.1)
+                    norm_depth = norm_depth / norm_depth.max()
+                    imageio.imwrite(
+                        "/".join([args.save_path, "img%d_depth.jpg" % (i,)]),
+                        (norm_depth * 255).detach().cpu().numpy().astype(np.uint8),
+                    )
+                    imageio.imwrite(
+                        "/".join([args.save_path, "img%d_acc.jpg" % (i,)]),
+                        (acc * 255).detach().cpu().numpy().astype(np.uint8),
+                    )
+                    imageio.imwrite(
+                        "/".join([args.save_path, "img%d_orig.jpg" % (i,)]),
+                        (pixels * 255).cpu().numpy().astype(np.uint8),
+                    )
+                    imageio.imwrite(
+                        "/".join([args.save_path, "img%d_pred.jpg" % (i,)]),
+                        (rgb * 255).detach().cpu().numpy().astype(np.uint8),
+                    )
+                    imageio.imwrite(
+                        "/".join([args.save_path, "img%d_error.jpg" % (i,)]),
+                        (abs(rgb - pixels) * 255)
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .astype(np.uint8),
+                    )
 
         psnr_avg = sum(psnrs) / len(psnrs)
         print(f"evaluation: {psnr_avg}")
 
         exit()
 
-
-    # setup the radiance field we want to train.
+    # set up the radiance field we want to train.
     max_steps = args.max_steps
     grad_scaler = torch.cuda.amp.GradScaler(2**10)
     radiance_field = NGPradianceField(
@@ -271,9 +318,7 @@ if __name__ == "__main__":
         torch.save(radiance_field, "initial_nerf.pt")
         exit()
 
-    optimizer = torch.optim.Adam(
-        radiance_field.parameters(), lr=1e-2, eps=1e-15
-    )
+    optimizer = torch.optim.Adam(radiance_field.parameters(), lr=1e-2, eps=1e-15)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer,
         milestones=[max_steps // 2, max_steps * 3 // 4, max_steps * 9 // 10],
@@ -288,8 +333,8 @@ if __name__ == "__main__":
 
     # training
     step = 0
-    tic = time.time()
-    for epoch in tqdm(range(10000000)):
+    train_start_time = time.time()
+    for epoch in tqdm(range(10000)):
         for i in range(len(train_dataset)):
             radiance_field.train()
             data = train_dataset[i]
@@ -307,9 +352,7 @@ if __name__ == "__main__":
                     origins = train_dataset.camtoworlds[camera_ids, :3, -1]
                     t = (origins - x).norm(dim=-1, keepdim=True)
                     # compute actual step size used in marching, based on the distance to the camera.
-                    step_size = torch.clamp(
-                        t * args.cone_angle, min=render_step_size
-                    )
+                    step_size = torch.clamp(t * args.cone_angle, min=render_step_size)
                     # filter out the points that are not in the near far plane.
                     if (near_plane is not None) and (near_plane is not None):
                         step_size = torch.where(
@@ -339,7 +382,7 @@ if __name__ == "__main__":
                 render_bkgd=render_bkgd,
                 cone_angle=args.cone_angle,
                 alpha_thre=alpha_thre,
-                distortion_loss = args.distortion_loss
+                distortion_loss=args.distortion_loss,
             )
             if n_rendering_samples == 0:
                 print("skipped!")
@@ -348,8 +391,7 @@ if __name__ == "__main__":
             # dynamic batch size for rays to keep sample batch size constant.
             num_rays = len(pixels)
             num_rays = int(
-                num_rays
-                * (target_sample_batch_size / float(n_rendering_samples))
+                num_rays * (target_sample_batch_size / float(n_rendering_samples))
             )
             train_dataset.update_num_rays(num_rays)
             alive_ray_mask = acc.squeeze(-1) > 0
@@ -366,8 +408,9 @@ if __name__ == "__main__":
             optimizer.step()
             scheduler.step()
 
-            if step % 10000 == 0:
-                elapsed_time = time.time() - tic
+            # print for every 10000 steps
+            if step % 10000 == 0 and step > 0:
+                elapsed_time = time.time() - train_start_time
                 loss = F.mse_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
                 print(
                     f"elapsed_time={elapsed_time:.2f}s | step={step} | "
@@ -376,8 +419,13 @@ if __name__ == "__main__":
                     f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} |"
                 )
 
-            if step >= 0 and step % max_steps == 0 and step > 0:
+            if step >= max_steps:
+                train_end_time = time.time()
+                print("training time is {}s".format(train_end_time - train_start_time))
+
+            if step >= max_steps:
                 # evaluation
+                eval_start_time = time.time()
                 radiance_field.eval()
 
                 psnrs = []
@@ -417,18 +465,53 @@ if __name__ == "__main__":
                         # )
                         # break
                 psnr_avg = sum(psnrs) / len(psnrs)
+                eval_end_time = time.time()
+                print("evaluation time is {}s".format(eval_end_time - eval_start_time))
                 print(f"evaluation: psnr_avg={psnr_avg}")
                 train_dataset.training = True
 
-            if step == max_steps:
+            # early stops when step reaches max_steps
+            if step >= max_steps:
+
                 print("training stops")
 
                 if args.save_path is not None:
                     print("Checkpoint saving to %s" % args.save_path)
 
-                    torch.save(radiance_field, args.save_path+"/model.pt")
-                    torch.save(occupancy_grid, args.save_path+"/occgrid.pt")
+                    torch.save(radiance_field, args.save_path + "/model.pt")
+                    torch.save(occupancy_grid, args.save_path + "/occgrid.pt")
 
+                running_time = radiance_field.running_time()
+                print(
+                    "time_base: {}s | avg_time_base: {}s | time_head: {}s | avg_time_head: {}s\n".format(
+                        running_time[0],
+                        running_time[1],
+                        running_time[2],
+                        running_time[3],
+                    )
+                )
+                if args.grid_search:
+                    pd.DataFrame.from_dict(
+                        {
+                            "head_dim": [args.head_dim],
+                            "head_layer": [args.head_layer],
+                            "time_base": [running_time[0]],
+                            "avg_time_base": [running_time[1]],
+                            "time_head": [running_time[2]],
+                            "avg_time_head": [running_time[3]],
+                            "train_time": [train_end_time - train_start_time],
+                            "eval_time": [eval_end_time - eval_start_time],
+                            "psnr_avg": [psnr_avg],
+                        }
+                    ).to_csv(
+                        "./grid_search_head.csv",
+                        mode="a",
+                        header=False
+                        if os.path.exists("./grid_search_head.csv")
+                        else True,
+                        index=False,
+                    )
                 exit()
 
+            # each step involves 1 optimization
             step += 1

@@ -2,6 +2,7 @@
 Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
 
+import time
 from typing import Callable, List, Union
 
 import torch
@@ -67,6 +68,7 @@ def _funcx(x):
     return trunc_exp(x - 1)
     # return x
 
+
 class NGPradianceField(torch.nn.Module):
     """Instance-NGP radiance Field"""
 
@@ -81,7 +83,7 @@ class NGPradianceField(torch.nn.Module):
         n_levels: int = 16,
         log2_hashmap_size: int = 19,
         base_dim: int = 64,
-        base_layer:int = 1,
+        base_layer: int = 1,
         head_dim: int = 64,
         head_layer: int = 2,
     ) -> None:
@@ -95,15 +97,19 @@ class NGPradianceField(torch.nn.Module):
         self.unbounded = unbounded
         self.base_dim = base_dim
         self.base_layer = base_layer
+        self.base_call_count = 0
+        self.base_running_time = 0.0
         self.head_dim = head_dim
         self.head_layer = head_layer
+        self.head_call_count = 0
+        self.head_running_time = 0.0
 
         self.geo_feat_dim = geo_feat_dim
         per_level_scale = 1.4472692012786865
 
         if self.use_viewdirs:
-            self.direction_encoding = tcnn.Encoding(
-                n_input_dims=num_dim,
+            self.direction_encoding = tcnn.Encoding(    # direction (x, y, z) will be encoded
+                n_input_dims=num_dim,                   # into a vector of size 16
                 encoding_config={
                     "otype": "Composite",
                     "nested": [
@@ -119,8 +125,8 @@ class NGPradianceField(torch.nn.Module):
 
         self.mlp_base = tcnn.NetworkWithInputEncoding(
             n_input_dims=num_dim,
-            n_output_dims=1 + self.geo_feat_dim,
-            encoding_config={
+            n_output_dims=1 + self.geo_feat_dim, # density_dim = 1 & mlp_base_out_dim = 15
+            encoding_config={                    # mlp_base_out will be inputted to mlp_head
                 "otype": "HashGrid",
                 "n_levels": n_levels,
                 "n_features_per_level": 2,
@@ -139,12 +145,8 @@ class NGPradianceField(torch.nn.Module):
         if self.geo_feat_dim > 0:
             self.mlp_head = tcnn.Network(
                 n_input_dims=(
-                    (
-                        self.direction_encoding.n_output_dims
-                        if self.use_viewdirs
-                        else 0
-                    )
-                    + self.geo_feat_dim
+                    (self.direction_encoding.n_output_dims if self.use_viewdirs else 0)
+                    + self.geo_feat_dim # input_dim = n_output_dim + geo_feat_dim
                 ),
                 n_output_dims=3,
                 network_config={
@@ -156,25 +158,38 @@ class NGPradianceField(torch.nn.Module):
                 },
             )
 
-    def query_density(self, x, return_feat: bool = False):
+    def running_time(self):
+        return (
+            self.base_running_time,
+            self.base_running_time / self.base_call_count,
+            self.head_running_time,
+            self.head_running_time / self.head_call_count,
+        )
+
+    def query_density(self, x: torch.Tensor, return_feat: bool = False):
         if self.unbounded:
             x = contract_to_unisphere(x, self.aabb)
         else:
             aabb_min, aabb_max = torch.split(self.aabb, self.num_dim, dim=-1)
             x = (x - aabb_min) / (aabb_max - aabb_min)
         selector = ((x > 0.0) & (x < 1.0)).all(dim=-1)
+        time_start = time.time()
         x = (
             self.mlp_base(x.view(-1, self.num_dim))
             .view(list(x.shape[:-1]) + [1 + self.geo_feat_dim])
             .to(x)
         )
+        torch.cuda.current_stream().synchronize()
+        time_end = time.time()
         density_before_activation, base_mlp_out = torch.split(
             x, [1, self.geo_feat_dim], dim=-1
         )
         density = (
-            self.density_activation(density_before_activation)
-            * selector[..., None]
+            self.density_activation(density_before_activation) * selector[..., None]
         )
+        self.base_running_time += time_end - time_start
+        self.base_call_count += 1
+
         if return_feat:
             return density, base_mlp_out
         else:
@@ -185,14 +200,16 @@ class NGPradianceField(torch.nn.Module):
         if self.use_viewdirs:
             dir = (dir + 1.0) / 2.0
             d = self.direction_encoding(dir.view(-1, dir.shape[-1]))
-            h = torch.cat([d, embedding.view(-1, self.geo_feat_dim)], dim=-1)
+            h = torch.cat([d, embedding.view(-1, self.geo_feat_dim)], dim=-1) # h_dim = embedding_dim + geo_feat_dim
         else:
             h = embedding.view(-1, self.geo_feat_dim)
-        rgb = (
-            self.mlp_head(h)
-            .view(list(embedding.shape[:-1]) + [3])
-            .to(embedding)
-        )
+        time_start = time.time()
+        rgb = self.mlp_head(h).view(list(embedding.shape[:-1]) + [3]).to(embedding)
+        torch.cuda.current_stream().synchronize()
+        time_end = time.time()
+        self.head_running_time += time_end - time_start
+        self.head_call_count += 1
+
         return rgb
 
     def forward(
