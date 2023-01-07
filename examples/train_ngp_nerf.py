@@ -125,7 +125,7 @@ if __name__ == "__main__":
         action="store_true",
         help="whether to automatically compute the aabb",
     )
-    parser.add_argument("--grid_search", action="store_true")
+    parser.add_argument("--grid_search", type=str, default=None)
     parser.add_argument("--cone_angle", type=float, default=0.0)
     parser.add_argument("--save_path", type=str, default=None)
     parser.add_argument("--get_initial_nerf", action="store_true")
@@ -495,11 +495,16 @@ if __name__ == "__main__":
                         running_time[3],
                     )
                 )
-                if args.grid_search:
+                search_result = "./grid_search_{}_{}_{}.csv".format(
+                    args.grid_search,
+                    args.head_dim if args.grid_search == "base" else args.base_dim,
+                    args.head_layer if args.grid_search == "base" else args.base_layer,
+                )
+                if args.grid_search in ["base", "head"]:
                     pd.DataFrame.from_dict(
                         {
-                            "head_dim": [args.head_dim],
-                            "head_layer": [args.head_layer],
+                            f"{args.grid_search}_dim": [args.head_dim],
+                            f"{args.grid_search}_layer": [args.head_layer],
                             "time_base": [running_time[0]],
                             "avg_time_base": [running_time[1]],
                             "time_head": [running_time[2]],
@@ -509,11 +514,9 @@ if __name__ == "__main__":
                             "psnr_avg": [psnr_avg],
                         }
                     ).to_csv(
-                        "./grid_search_head.csv",
+                        search_result,
                         mode="a",
-                        header=False
-                        if os.path.exists("./grid_search_head.csv")
-                        else True,
+                        header=False if os.path.exists(search_result) else True,
                         index=False,
                     )
                 exit()
