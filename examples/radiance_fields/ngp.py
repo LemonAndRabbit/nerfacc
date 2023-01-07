@@ -173,13 +173,14 @@ class NGPradianceField(torch.nn.Module):
             aabb_min, aabb_max = torch.split(self.aabb, self.num_dim, dim=-1)
             x = (x - aabb_min) / (aabb_max - aabb_min)
         selector = ((x > 0.0) & (x < 1.0)).all(dim=-1)
+        torch.cuda.synchronize()
         time_start = time.time()
         x = (
             self.mlp_base(x.view(-1, self.num_dim))
             .view(list(x.shape[:-1]) + [1 + self.geo_feat_dim])
             .to(x)
         )
-        torch.cuda.current_stream().synchronize()
+        torch.cuda.synchronize()
         time_end = time.time()
         density_before_activation, base_mlp_out = torch.split(
             x, [1, self.geo_feat_dim], dim=-1
@@ -203,9 +204,10 @@ class NGPradianceField(torch.nn.Module):
             h = torch.cat([d, embedding.view(-1, self.geo_feat_dim)], dim=-1) # h_dim = embedding_dim + geo_feat_dim
         else:
             h = embedding.view(-1, self.geo_feat_dim)
+        torch.cuda.synchronize()
         time_start = time.time()
         rgb = self.mlp_head(h).view(list(embedding.shape[:-1]) + [3]).to(embedding)
-        torch.cuda.current_stream().synchronize()
+        torch.cuda.synchronize()
         time_end = time.time()
         self.head_running_time += time_end - time_start
         self.head_call_count += 1

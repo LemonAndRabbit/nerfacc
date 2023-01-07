@@ -333,6 +333,7 @@ if __name__ == "__main__":
 
     # training
     step = 0
+    torch.cuda.synchronize()
     train_start_time = time.time()
     for epoch in tqdm(range(10000)):
         for i in range(len(train_dataset)):
@@ -410,6 +411,7 @@ if __name__ == "__main__":
 
             # print for every 10000 steps
             if step % 10000 == 0 and step > 0:
+                torch.cuda.synchronize()
                 elapsed_time = time.time() - train_start_time
                 loss = F.mse_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
                 print(
@@ -420,11 +422,13 @@ if __name__ == "__main__":
                 )
 
             if step >= max_steps:
+                torch.cuda.synchronize()
                 train_end_time = time.time()
                 print("training time is {}s".format(train_end_time - train_start_time))
 
             if step >= max_steps:
                 # evaluation
+                torch.cuda.synchronize()
                 eval_start_time = time.time()
                 radiance_field.eval()
 
@@ -465,6 +469,7 @@ if __name__ == "__main__":
                         # )
                         # break
                 psnr_avg = sum(psnrs) / len(psnrs)
+                torch.cuda.synchronize()
                 eval_end_time = time.time()
                 print("evaluation time is {}s".format(eval_end_time - eval_start_time))
                 print(f"evaluation: psnr_avg={psnr_avg}")
