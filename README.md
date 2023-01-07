@@ -22,3 +22,9 @@ The best setting:
 bash scripts/gen_all_0.2_512_train_bkgd_aug_35k.sh
 ```
 The output files will be written into `mesh_0.2_512_train_bkgd_aug_35k/{scene}`
+
+## mlp_base & mlp_head running time measure
+run
+```bash
+bash scripts/mlp_time_measure.sh 
+```
