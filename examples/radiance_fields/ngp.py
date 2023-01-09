@@ -108,8 +108,8 @@ class NGPradianceField(torch.nn.Module):
         per_level_scale = 1.4472692012786865
 
         if self.use_viewdirs:
-            self.direction_encoding = tcnn.Encoding(    # direction (x, y, z) will be encoded
-                n_input_dims=num_dim,                   # into a vector of size 16
+            self.direction_encoding = tcnn.Encoding(  # direction (x, y, z) will be encoded
+                n_input_dims=num_dim,  # into a vector of size 16
                 encoding_config={
                     "otype": "Composite",
                     "nested": [
@@ -125,8 +125,9 @@ class NGPradianceField(torch.nn.Module):
 
         self.mlp_base = tcnn.NetworkWithInputEncoding(
             n_input_dims=num_dim,
-            n_output_dims=1 + self.geo_feat_dim, # density_dim = 1 & mlp_base_out_dim = 15
-            encoding_config={                    # mlp_base_out will be inputted to mlp_head
+            n_output_dims=1
+            + self.geo_feat_dim,  # density_dim = 1 & mlp_base_out_dim = 15
+            encoding_config={  # mlp_base_out will be inputted to mlp_head
                 "otype": "HashGrid",
                 "n_levels": n_levels,
                 "n_features_per_level": 2,
@@ -146,7 +147,7 @@ class NGPradianceField(torch.nn.Module):
             self.mlp_head = tcnn.Network(
                 n_input_dims=(
                     (self.direction_encoding.n_output_dims if self.use_viewdirs else 0)
-                    + self.geo_feat_dim # input_dim = n_output_dim + geo_feat_dim
+                    + self.geo_feat_dim  # input_dim = n_output_dim + geo_feat_dim
                 ),
                 n_output_dims=3,
                 network_config={
@@ -196,12 +197,14 @@ class NGPradianceField(torch.nn.Module):
         else:
             return density
 
-    def _query_rgb(self, dir, embedding):
+    def query_rgb(self, dir, embedding):
         # tcnn requires directions in the range [0, 1]
         if self.use_viewdirs:
             dir = (dir + 1.0) / 2.0
             d = self.direction_encoding(dir.view(-1, dir.shape[-1]))
-            h = torch.cat([d, embedding.view(-1, self.geo_feat_dim)], dim=-1) # h_dim = embedding_dim + geo_feat_dim
+            h = torch.cat(
+                [d, embedding.view(-1, self.geo_feat_dim)], dim=-1
+            )  # h_dim = embedding_dim + geo_feat_dim
         else:
             h = embedding.view(-1, self.geo_feat_dim)
         torch.cuda.synchronize()
@@ -224,5 +227,5 @@ class NGPradianceField(torch.nn.Module):
                 positions.shape == directions.shape
             ), f"{positions.shape} v.s. {directions.shape}"
             density, embedding = self.query_density(positions, return_feat=True)
-            rgb = self._query_rgb(directions, embedding=embedding)
+            rgb = self.query_rgb(directions, embedding=embedding)
         return rgb, density

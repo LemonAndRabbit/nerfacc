@@ -148,6 +148,15 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps", type=int, default=20000)
     args = parser.parse_args()
 
+    if args.load_path is not None:
+        args.load_path = (
+            os.path.dirname(os.path.dirname(__file__)) + "/" + args.load_path
+        )
+    if args.save_path is not None:
+        args.save_path = (
+            os.path.dirname(os.path.dirname(__file__)) + "/" + args.save_path
+        )
+
     render_n_samples = 1024
 
     # set up the dataset
@@ -421,59 +430,59 @@ if __name__ == "__main__":
                     f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} |"
                 )
 
-            if step >= max_steps:
-                torch.cuda.synchronize()
-                train_end_time = time.time()
-                print("training time is {}s".format(train_end_time - train_start_time))
+            # if step >= max_steps:
+            #     torch.cuda.synchronize()
+            #     train_end_time = time.time()
+            #     print("training time is {}s".format(train_end_time - train_start_time))
 
-            if step >= max_steps:
-                # evaluation
-                torch.cuda.synchronize()
-                eval_start_time = time.time()
-                radiance_field.eval()
-
-                psnrs = []
-                with torch.no_grad():
-                    for i in tqdm(range(len(test_dataset))):
-                        data = test_dataset[i]
-                        render_bkgd = data["color_bkgd"]
-                        rays = data["rays"]
-                        pixels = data["pixels"]
-
-                        # rendering
-                        rgb, acc, depth, _, _ = render_image(
-                            radiance_field,
-                            occupancy_grid,
-                            rays,
-                            scene_aabb,
-                            # rendering options
-                            near_plane=near_plane,
-                            far_plane=far_plane,
-                            render_step_size=render_step_size,
-                            render_bkgd=render_bkgd,
-                            cone_angle=args.cone_angle,
-                            alpha_thre=alpha_thre,
-                            # test options
-                            test_chunk_size=args.test_chunk_size,
-                        )
-                        mse = F.mse_loss(rgb, pixels)
-                        psnr = -10.0 * torch.log(mse) / np.log(10.0)
-                        psnrs.append(psnr.item())
-                        # imageio.imwrite(
-                        #     "acc_binary_test.png",
-                        #     ((acc > 0).float().cpu().numpy() * 255).astype(np.uint8),
-                        # )
-                        # imageio.imwrite(
-                        #     "rgb_test.png",
-                        #     (rgb.cpu().numpy() * 255).astype(np.uint8),
-                        # )
-                        # break
-                psnr_avg = sum(psnrs) / len(psnrs)
-                torch.cuda.synchronize()
-                eval_end_time = time.time()
-                print("evaluation time is {}s".format(eval_end_time - eval_start_time))
-                print(f"evaluation: psnr_avg={psnr_avg}")
-                train_dataset.training = True
+            # if step >= max_steps:
+            #     # evaluation
+            #     torch.cuda.synchronize()
+            #     eval_start_time = time.time()
+            #     radiance_field.eval()
+            #
+            #     psnrs = []
+            #     with torch.no_grad():
+            #         for i in tqdm(range(len(test_dataset))):
+            #             data = test_dataset[i]
+            #             render_bkgd = data["color_bkgd"]
+            #             rays = data["rays"]
+            #             pixels = data["pixels"]
+            #
+            #             # rendering
+            #             rgb, acc, depth, _, _ = render_image(
+            #                 radiance_field,
+            #                 occupancy_grid,
+            #                 rays,
+            #                 scene_aabb,
+            #                 # rendering options
+            #                 near_plane=near_plane,
+            #                 far_plane=far_plane,
+            #                 render_step_size=render_step_size,
+            #                 render_bkgd=render_bkgd,
+            #                 cone_angle=args.cone_angle,
+            #                 alpha_thre=alpha_thre,
+            #                 # test options
+            #                 test_chunk_size=args.test_chunk_size,
+            #             )
+            #             mse = F.mse_loss(rgb, pixels)
+            #             psnr = -10.0 * torch.log(mse) / np.log(10.0)
+            #             psnrs.append(psnr.item())
+            #             # imageio.imwrite(
+            #             #     "acc_binary_test.png",
+            #             #     ((acc > 0).float().cpu().numpy() * 255).astype(np.uint8),
+            #             # )
+            #             # imageio.imwrite(
+            #             #     "rgb_test.png",
+            #             #     (rgb.cpu().numpy() * 255).astype(np.uint8),
+            #             # )
+            #             # break
+            #     psnr_avg = sum(psnrs) / len(psnrs)
+            #     torch.cuda.synchronize()
+            #     eval_end_time = time.time()
+            #     print("evaluation time is {}s".format(eval_end_time - eval_start_time))
+            #     print(f"evaluation: psnr_avg={psnr_avg}")
+            #     train_dataset.training = True
 
             # early stops when step reaches max_steps
             if step >= max_steps:
@@ -486,39 +495,39 @@ if __name__ == "__main__":
                     torch.save(radiance_field, args.save_path + "/model.pt")
                     torch.save(occupancy_grid, args.save_path + "/occgrid.pt")
 
-                running_time = radiance_field.running_time()
-                print(
-                    "time_base: {}s | avg_time_base: {}s | time_head: {}s | avg_time_head: {}s\n".format(
-                        running_time[0],
-                        running_time[1],
-                        running_time[2],
-                        running_time[3],
-                    )
-                )
-                search_result = "./grid_search_{}_{}_{}.csv".format(
-                    args.grid_search,
-                    args.head_dim if args.grid_search == "base" else args.base_dim,
-                    args.head_layer if args.grid_search == "base" else args.base_layer,
-                )
-                if args.grid_search in ["base", "head"]:
-                    pd.DataFrame.from_dict(
-                        {
-                            f"{args.grid_search}_dim": [args.head_dim],
-                            f"{args.grid_search}_layer": [args.head_layer],
-                            "time_base": [running_time[0]],
-                            "avg_time_base": [running_time[1]],
-                            "time_head": [running_time[2]],
-                            "avg_time_head": [running_time[3]],
-                            "train_time": [train_end_time - train_start_time],
-                            "eval_time": [eval_end_time - eval_start_time],
-                            "psnr_avg": [psnr_avg],
-                        }
-                    ).to_csv(
-                        search_result,
-                        mode="a",
-                        header=False if os.path.exists(search_result) else True,
-                        index=False,
-                    )
+                # running_time = radiance_field.running_time()
+                # print(
+                #     "time_base: {}s | avg_time_base: {}s | time_head: {}s | avg_time_head: {}s\n".format(
+                #         running_time[0],
+                #         running_time[1],
+                #         running_time[2],
+                #         running_time[3],
+                #     )
+                # )
+                # search_result = "./grid_search_{}_{}_{}.csv".format(
+                #     args.grid_search,
+                #     args.head_dim if args.grid_search == "base" else args.base_dim,
+                #     args.head_layer if args.grid_search == "base" else args.base_layer,
+                # )
+                # if args.grid_search in ["base", "head"]:
+                #     pd.DataFrame.from_dict(
+                #         {
+                #             f"{args.grid_search}_dim": [args.head_dim],
+                #             f"{args.grid_search}_layer": [args.head_layer],
+                #             "time_base": [running_time[0]],
+                #             "avg_time_base": [running_time[1]],
+                #             "time_head": [running_time[2]],
+                #             "avg_time_head": [running_time[3]],
+                #             "train_time": [train_end_time - train_start_time],
+                #             # "eval_time": [eval_end_time - eval_start_time],
+                #             # "psnr_avg": [psnr_avg],
+                #         }
+                #     ).to_csv(
+                #         search_result,
+                #         mode="a",
+                #         header=False if os.path.exists(search_result) else True,
+                #         index=False,
+                #     )
                 exit()
 
             # each step involves 1 optimization
