@@ -1,6 +1,6 @@
 #!/bin/bash
 set -x
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=8
 for scene in chair drums ficus hotdog lego materials mic ship
 do
     mkdir -p mesh_0.2_512_train_bkgd_aug_35k/${scene}

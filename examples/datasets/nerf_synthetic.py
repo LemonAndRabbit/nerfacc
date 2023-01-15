@@ -79,6 +79,7 @@ class SubjectLoader(torch.utils.data.Dataset):
         near: float = None,
         far: float = None,
         batch_over_images: bool = True,
+        supersampling = 1.,
     ):
         super().__init__()
         assert split in self.SPLITS, "%s" % split
@@ -93,6 +94,7 @@ class SubjectLoader(torch.utils.data.Dataset):
         )
         self.color_bkgd_aug = color_bkgd_aug
         self.batch_over_images = batch_over_images
+        self.supersampling = supersampling
         if split == "trainval":
             _images_train, _camtoworlds_train, _focal_train = _load_renderings(
                 root_fp, subject_id, "train"
@@ -211,18 +213,60 @@ class SubjectLoader(torch.utils.data.Dataset):
             directions, dim=-1, keepdims=True
         )
 
+        if self.supersampling == 2:
+            x = x.unsqueeze(-1)
+            y = y.unsqueeze(-1)
+            xs = torch.cat([x-0.25, x+0.25, x-0.25, x+0.25],dim=-1).flatten()
+            ys = torch.cat([y-0.25, y-0.25, y+0.25, y+0.25],dim=-1).flatten()
+
+            camera_dirs2 = F.pad(
+                torch.stack(
+                    [
+                        (xs - self.K[0, 2] + 0.5) / self.K[0, 0],
+                        (ys - self.K[1, 2] + 0.5)
+                        / self.K[1, 1]
+                        * (-1.0 if self.OPENGL_CAMERA else 1.0),
+                    ],
+                    dim=-1,
+                ),
+                (0, 1),
+                value=(-1.0 if self.OPENGL_CAMERA else 1.0),
+            )  # [num_rays*4, 3]
+
+            # [n_cams, height*2, width*2, 3]
+            if c2w.shape[0] != 1:
+                c2w = torch.cat([c2w]*4, dim=0)
+            directions2 = (camera_dirs2[:, None, :] * c2w[:, :3, :3]).sum(dim=-1)
+            origins2 = torch.broadcast_to(c2w[:, :3, -1], directions2.shape)
+            viewdirs2 = directions2 / torch.linalg.norm(
+                directions2, dim=-1, keepdims=True
+            )
+
+
         if self.training:
             origins = torch.reshape(origins, (num_rays, 3))
             viewdirs = torch.reshape(viewdirs, (num_rays, 3))
             rgba = torch.reshape(rgba, (num_rays, 4))
+            if self.supersampling == 2:
+                origins2 = torch.reshape(origins2, (num_rays, 4, 3))
+                viewdirs2 = torch.reshape(viewdirs2, (num_rays, 4, 3))
         else:
             origins = torch.reshape(origins, (self.HEIGHT, self.WIDTH, 3))
             viewdirs = torch.reshape(viewdirs, (self.HEIGHT, self.WIDTH, 3))
             rgba = torch.reshape(rgba, (self.HEIGHT, self.WIDTH, 4))
+            if self.supersampling == 2:
+                origins2 = torch.reshape(origins2, (self.HEIGHT, self.WIDTH, 4, 3))
+                viewdirs2 = torch.reshape(viewdirs2, (self.HEIGHT, self.WIDTH, 4, 3))
 
         rays = Rays(origins=origins, viewdirs=viewdirs)
 
-        return {
+        results = {
             "rgba": rgba,  # [h, w, 4] or [num_rays, 4]
             "rays": rays,  # [h, w, 3] or [num_rays, 3]
         }
+
+        if self.supersampling == 2:
+            rays2 = Rays(origins=origins2, viewdirs=viewdirs2)
+            results["rays2"] = rays2
+
+        return results

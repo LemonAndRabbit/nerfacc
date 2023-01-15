@@ -199,11 +199,24 @@ class NGPradianceField(torch.nn.Module):
         self,
         positions: torch.Tensor,
         directions: torch.Tensor = None,
+        directions_coarse: torch.Tensor = None,
+        supersampling: str = None,
     ):
         if self.use_viewdirs and (directions is not None):
             assert (
                 positions.shape == directions.shape
             ), f"{positions.shape} v.s. {directions.shape}"
             density, embedding = self.query_density(positions, return_feat=True)
-            rgb = self._query_rgb(directions, embedding=embedding)
+            
+            if supersampling == 'defer':
+                density = torch.mean(density, dim=-2)
+                embedding = torch.mean(embedding, dim=-2)
+                rgb = self._query_rgb(directions_coarse, embedding=embedding)
+            else:
+                rgb = self._query_rgb(directions, embedding=embedding)
+
+            if supersampling == 'simple':
+                density = torch.mean(density, dim=-2)
+                rgb = torch.mean(rgb, dim=-2)
+
         return rgb, density

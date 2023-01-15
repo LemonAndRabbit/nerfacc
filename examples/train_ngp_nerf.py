@@ -11,12 +11,14 @@ import imageio
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from radiance_fields.ngp import NGPradianceField
 from utils import render_image, set_random_seed, convert_sdf_samples_to_ply
 
 from nerfacc import ContractionType, OccupancyGrid
-from nerfacc.pack import unpack_info
+
+import matplotlib.pyplot as plt
 
 @torch.no_grad()
 def export_mesh(radiance_field: NGPradianceField, grid_size=[512, 512, 512], device="cuda:0", render_step_size=1e-2, save_path=None, level=0.05):
@@ -120,6 +122,8 @@ if __name__ == "__main__":
     parser.add_argument("--head_dim", type=int, default=64)
     parser.add_argument("--geo_feat_dim", type=int, default=15)
     parser.add_argument("--max_steps", type=int, default=20000)
+    parser.add_argument("--test_every", type=int, default=0)
+    parser.add_argument("--supersampling", type=str, default=None)
     args = parser.parse_args()
 
     render_n_samples = 1024
@@ -142,6 +146,10 @@ if __name__ == "__main__":
         target_sample_batch_size = 1 << 18
         grid_resolution = 128
         train_dataset_kwargs = {"color_bkgd_aug": args.color_bkgd_aug}
+    
+    if args.supersampling == 'simple' or args.supersampling == 'defer':
+        train_dataset_kwargs['supersampling'] = 2
+        test_dataset_kwargs['supersampling'] = 2
 
     train_dataset = SubjectLoader(
         subject_id=args.scene,
@@ -219,11 +227,18 @@ if __name__ == "__main__":
                 rays = data["rays"]
                 pixels = data["pixels"]
 
+                if args.supersampling:
+                    rays2 = data['rays2']
+                else:
+                    rays2 = None
+
                 # rendering
                 rgb, acc, depth, _, _ = render_image(
                     radiance_field,
                     occupancy_grid,
                     rays,
+                    rays2,
+                    args.supersampling,
                     scene_aabb,
                     # rendering options
                     near_plane=near_plane,
@@ -271,20 +286,24 @@ if __name__ == "__main__":
         torch.save(radiance_field, "initial_nerf.pt")
         exit()
 
-    optimizer = torch.optim.Adam(
-        radiance_field.parameters(), lr=1e-2, eps=1e-15
-    )
+    optimizer = torch.optim.Adam(radiance_field.parameters(), lr=1e-2, eps=1e-15)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer,
         milestones=[max_steps // 2, max_steps * 3 // 4, max_steps * 9 // 10],
         gamma=0.33,
     )
 
+
     occupancy_grid = OccupancyGrid(
         roi_aabb=args.aabb,
         resolution=grid_resolution,
         contraction_type=contraction_type,
     ).to(device)
+
+    if args.test_every > 0 and args.save_path:
+        writer = SummaryWriter('/'.join([args.save_path, 'log']))
+    else:
+        writer = None
 
     # training
     step = 0
@@ -297,6 +316,11 @@ if __name__ == "__main__":
             render_bkgd = data["color_bkgd"]
             rays = data["rays"]
             pixels = data["pixels"]
+
+            if args.supersampling:
+                rays2 = data['rays2']
+            else:
+                rays2 = None
 
             def occ_eval_fn(x):
                 if args.cone_angle > 0.0:
@@ -331,6 +355,8 @@ if __name__ == "__main__":
                 radiance_field,
                 occupancy_grid,
                 rays,
+                rays2,
+                args.supersampling,
                 scene_aabb,
                 # rendering options
                 near_plane=near_plane,
@@ -355,10 +381,10 @@ if __name__ == "__main__":
             alive_ray_mask = acc.squeeze(-1) > 0
 
             # compute loss
-            loss = F.smooth_l1_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
+            pic_loss = F.smooth_l1_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
 
             if args.distortion_loss:
-                loss += extra_loss * 0.0000001
+                loss = pic_loss + extra_loss * 0.0000001
 
             optimizer.zero_grad()
             # do not unscale it because we are using Adam.
@@ -376,7 +402,13 @@ if __name__ == "__main__":
                     f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} |"
                 )
 
-            if step >= 0 and step % max_steps == 0 and step > 0:
+            if writer and (step+1) % args.test_every == 0:
+                writer.add_scalar('train_psnr', (-10.0 * torch.log(F.mse_loss(rgb, pixels)) / np.log(10.0)).item(), step)
+
+            del rgb, acc, depth, n_rendering_samples, extra_loss, pic_loss, loss
+
+
+            if step == max_steps or (args.test_every > 0 and (step+1) % args.test_every == 0):
                 # evaluation
                 radiance_field.eval()
 
@@ -388,11 +420,18 @@ if __name__ == "__main__":
                         rays = data["rays"]
                         pixels = data["pixels"]
 
+                        if args.supersampling:
+                            rays2 = data['rays2']
+                        else:
+                            rays2 = None
+
                         # rendering
                         rgb, acc, depth, _, _ = render_image(
                             radiance_field,
                             occupancy_grid,
                             rays,
+                            rays2,
+                            args.supersampling,
                             scene_aabb,
                             # rendering options
                             near_plane=near_plane,
@@ -417,8 +456,11 @@ if __name__ == "__main__":
                         # )
                         # break
                 psnr_avg = sum(psnrs) / len(psnrs)
-                print(f"evaluation: psnr_avg={psnr_avg}")
+                print(f"evaluation: psnr_avg={psnr_avg} at step={step}")
                 train_dataset.training = True
+
+                if args.test_every > 0:
+                    writer.add_scalar('test_psnr', psnr_avg, step)
 
             if step == max_steps:
                 print("training stops")
@@ -428,7 +470,6 @@ if __name__ == "__main__":
 
                     torch.save(radiance_field, args.save_path+"/model.pt")
                     torch.save(occupancy_grid, args.save_path+"/occgrid.pt")
-
                 exit()
 
             step += 1

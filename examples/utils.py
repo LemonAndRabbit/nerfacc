@@ -23,6 +23,8 @@ def render_image(
     radiance_field: torch.nn.Module,
     occupancy_grid: OccupancyGrid,
     rays: Rays,
+    rays2: Rays,
+    supersampling,
     scene_aabb: torch.Tensor,
     # rendering options
     near_plane: Optional[float] = None,
@@ -45,6 +47,10 @@ def render_image(
         rays = namedtuple_map(
             lambda r: r.reshape([num_rays] + list(r.shape[2:])), rays
         )
+        if rays2 is not None:
+            rays2 = namedtuple_map(
+                lambda r: r.reshape([num_rays] + list(r.shape[2:])), rays2
+            )
     else:
         num_rays, _ = rays_shape
 
@@ -65,18 +71,28 @@ def render_image(
 
     def rgb_sigma_fn(t_starts, t_ends, ray_indices):
         ray_indices = ray_indices.long()
-        t_origins = chunk_rays.origins[ray_indices]
-        t_dirs = chunk_rays.viewdirs[ray_indices]
-        positions = t_origins + t_dirs * (t_starts + t_ends) / 2.0
-        if timestamps is not None:
-            # dnerf
-            t = (
-                timestamps[ray_indices]
-                if radiance_field.training
-                else timestamps.expand_as(positions[:, :1])
-            )
-            return radiance_field(positions, t, t_dirs)
-        return radiance_field(positions, t_dirs)
+        if supersampling:
+            t_origins = chunk_rays2.origins[ray_indices]
+            t_dirs = chunk_rays2.viewdirs[ray_indices]
+            positions = t_origins + t_dirs * (t_starts + t_ends)[..., None] / 2.0
+            t_coarse_dirs = chunk_rays.viewdirs[ray_indices]
+
+            return radiance_field(positions, t_dirs, t_coarse_dirs, supersampling)
+        else:
+            t_origins = chunk_rays.origins[ray_indices]
+            t_dirs = chunk_rays.viewdirs[ray_indices]
+            positions = t_origins + t_dirs * (t_starts + t_ends) / 2.0
+
+            return radiance_field(positions, t_dirs)
+        # if timestamps is not None:
+        #     # dnerf
+        #     t = (
+        #         timestamps[ray_indices]
+        #         if radiance_field.training
+        #         else timestamps.expand_as(positions[:, :1])
+        #     )
+        #     return radiance_field(positions, t, t_dirs)
+        # return radiance_field(positions, t_dirs)
 
     results = []
     chunk = (
@@ -88,6 +104,10 @@ def render_image(
 
     for i in range(0, num_rays, chunk):
         chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
+        if supersampling:
+            chunk_rays2 = namedtuple_map(lambda r: r[i : i + chunk], rays2)
+        else:
+            chunk_rays2 = None
         ray_indices, t_starts, t_ends = ray_marching(
             chunk_rays.origins,
             chunk_rays.viewdirs,
