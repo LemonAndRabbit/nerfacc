@@ -56,7 +56,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--train_split",
         type=str,
-        default="trainval",
+        default="train",
         choices=["train", "trainval"],
         help="which train split to use",
     )
@@ -124,6 +124,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps", type=int, default=20000)
     parser.add_argument("--test_every", type=int, default=0)
     parser.add_argument("--supersampling", type=str, default=None)
+    parser.add_argument("--swa", action="store_true")
+    parser.add_argument("--swa_step", type=int, default=None)
     args = parser.parse_args()
 
     render_n_samples = 1024
@@ -134,7 +136,7 @@ if __name__ == "__main__":
     if args.unbounded:
         from datasets.nerf_360_v2 import SubjectLoader
 
-        data_root_fp = "/home/ruilongli/data/360_v2/"
+        data_root_fp = "/data3/dataset_nerf/360_v2/"
         target_sample_batch_size = 1 << 20
         train_dataset_kwargs = {"color_bkgd_aug": "random", "factor": 4}
         test_dataset_kwargs = {"factor": 4}
@@ -293,6 +295,12 @@ if __name__ == "__main__":
         gamma=0.33,
     )
 
+    if args.swa:
+        swa_radiance_field = torch.optim.swa_utils.AveragedModel(radiance_field)
+        swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=1e-2*0.33*0.33)
+
+        if args.swa_step is None:
+            args.swa_step = int(args.max_steps * 0.75)
 
     occupancy_grid = OccupancyGrid(
         roi_aabb=args.aabb,
@@ -385,14 +393,23 @@ if __name__ == "__main__":
 
             if args.distortion_loss:
                 loss = pic_loss + extra_loss * 0.0000001
+            else:
+                loss = pic_loss
 
             optimizer.zero_grad()
             # do not unscale it because we are using Adam.
             grad_scaler.scale(loss).backward()
             optimizer.step()
-            scheduler.step()
+            if args.swa and step > args.swa_step:
+                swa_radiance_field.update_parameters(radiance_field)
+                swa_scheduler.step()
+            else:
+                scheduler.step()
+            
+            if writer is not None:
+                writer.add_scalar('lr', scheduler.get_last_lr()[0], step)
 
-            if step % 10000 == 0:
+            if step % 5000 == 0:
                 elapsed_time = time.time() - tic
                 loss = F.mse_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
                 print(
@@ -401,6 +418,7 @@ if __name__ == "__main__":
                     f"alive_ray_mask={alive_ray_mask.long().sum():d} | "
                     f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} |"
                 )
+                writer.add_scalar('time', elapsed_time, step)
 
             if writer and (step+1) % args.test_every == 0:
                 writer.add_scalar('train_psnr', (-10.0 * torch.log(F.mse_loss(rgb, pixels)) / np.log(10.0)).item(), step)
@@ -408,9 +426,10 @@ if __name__ == "__main__":
             del rgb, acc, depth, n_rendering_samples, extra_loss, pic_loss, loss
 
 
-            if step == max_steps or (args.test_every > 0 and (step+1) % args.test_every == 0):
+            if step == max_steps or (args.test_every > 0 and step > 0 and (step+0) % args.test_every == 0):
                 # evaluation
-                radiance_field.eval()
+                model = radiance_field
+                model.eval()
 
                 psnrs = []
                 with torch.no_grad():
@@ -427,7 +446,7 @@ if __name__ == "__main__":
 
                         # rendering
                         rgb, acc, depth, _, _ = render_image(
-                            radiance_field,
+                            model,
                             occupancy_grid,
                             rays,
                             rays2,
@@ -457,10 +476,62 @@ if __name__ == "__main__":
                         # break
                 psnr_avg = sum(psnrs) / len(psnrs)
                 print(f"evaluation: psnr_avg={psnr_avg} at step={step}")
-                train_dataset.training = True
+
+                if args.swa and step > args.swa_step:
+                    model = swa_radiance_field.module
+                    print("using swa model for testing")
+                    model.eval()
+                    psnrs = []
+                    with torch.no_grad():
+                        for i in tqdm(range(len(test_dataset))):
+                            data = test_dataset[i]
+                            render_bkgd = data["color_bkgd"]
+                            rays = data["rays"]
+                            pixels = data["pixels"]
+
+                            if args.supersampling:
+                                rays2 = data['rays2']
+                            else:
+                                rays2 = None
+
+                            # rendering
+                            rgb, acc, depth, _, _ = render_image(
+                                model,
+                                occupancy_grid,
+                                rays,
+                                rays2,
+                                args.supersampling,
+                                scene_aabb,
+                                # rendering options
+                                near_plane=near_plane,
+                                far_plane=far_plane,
+                                render_step_size=render_step_size,
+                                render_bkgd=render_bkgd,
+                                cone_angle=args.cone_angle,
+                                alpha_thre=alpha_thre,
+                                # test options
+                                test_chunk_size=args.test_chunk_size,
+                            )
+                            mse = F.mse_loss(rgb, pixels)
+                            psnr = -10.0 * torch.log(mse) / np.log(10.0)
+                            psnrs.append(psnr.item())
+                            # imageio.imwrite(
+                            #     "acc_binary_test.png",
+                            #     ((acc > 0).float().cpu().numpy() * 255).astype(np.uint8),
+                            # )
+                            # imageio.imwrite(
+                            #     "rgb_test.png",
+                            #     (rgb.cpu().numpy() * 255).astype(np.uint8),
+                            # )
+                            # break
+                    swa_psnr_avg = sum(psnrs) / len(psnrs)
+                    print(f"evaluation: swa_psnr_avg={swa_psnr_avg} at step={step}")
+                    train_dataset.training = True
 
                 if args.test_every > 0:
                     writer.add_scalar('test_psnr', psnr_avg, step)
+                    if args.swa and step > args.swa_step:
+                        writer.add_scalar('swa_test_psnr', swa_psnr_avg, step)
 
             if step == max_steps:
                 print("training stops")
@@ -469,6 +540,8 @@ if __name__ == "__main__":
                     print("Checkpoint saving to %s" % args.save_path)
 
                     torch.save(radiance_field, args.save_path+"/model.pt")
+                    if args.swa:
+                        torch.save(swa_radiance_field.module, args.save_path+"/swa_model.pt")
                     torch.save(occupancy_grid, args.save_path+"/occgrid.pt")
                 exit()
 
