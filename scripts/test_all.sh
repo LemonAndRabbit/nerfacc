@@ -6,7 +6,7 @@ for epoch in 35000
 do
     for scene in chair drums ficus hotdog lego materials mic ship
     do
-        dir=mesh_train_epoch${epoch}
+        dir=mesh_swa_train_epoch${epoch}
         ${set_cuda} python examples/train_ngp_nerf.py --scene ${scene} --load_path ${dir}/${scene}
     done
 done

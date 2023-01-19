@@ -1,9 +1,10 @@
 #!/bin/bash
 set -x
-export CUDA_VISIBLE_DEVICES=9
+export CUDA_VISIBLE_DEVICES=8
 for head_layer in 1 2 3
 do
-    for head_dim in 16 32 64
+    # for head_dim in 16 32 64
+    for head_dim in 128
     do
         for scene in chair drums ficus hotdog lego materials mic ship
         do
