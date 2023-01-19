@@ -380,11 +380,14 @@ if __name__ == "__main__":
                 continue
 
             # dynamic batch size for rays to keep sample batch size constant.
+            # if train_dataset.num_rays < 10000:
             num_rays = len(pixels)
             num_rays = int(
                 num_rays
                 * (target_sample_batch_size / float(n_rendering_samples))
             )
+            if num_rays > 10000:
+                num_rays = 10000
             train_dataset.update_num_rays(num_rays)
             alive_ray_mask = acc.squeeze(-1) > 0
 
@@ -392,7 +395,10 @@ if __name__ == "__main__":
             pic_loss = F.smooth_l1_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
 
             if args.distortion_loss:
-                loss = pic_loss + extra_loss * 0.0000001
+                if args.unbounded:
+                    loss = pic_loss + extra_loss * 0.00000001
+                else:
+                    loss = pic_loss + extra_loss * 0.0000001
             else:
                 loss = pic_loss
 
@@ -409,7 +415,7 @@ if __name__ == "__main__":
             if writer is not None:
                 writer.add_scalar('lr', scheduler.get_last_lr()[0], step)
 
-            if step % 5000 == 0:
+            if step % 1 == 0:
                 elapsed_time = time.time() - tic
                 loss = F.mse_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
                 print(

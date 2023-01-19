@@ -19,6 +19,6 @@ pip install -e .
 
 The best setting:
 ```bash
-bash scripts/gen_all_0.2_512_train_bkgd_aug_35k.sh
+bash scripts/gen_all_0.2_512.sh
 ```
-The output files will be written into `mesh_0.2_512_train_bkgd_aug_35k/{scene}`
+The output files will be written into `mesh_train_epoch35000/{scene}`

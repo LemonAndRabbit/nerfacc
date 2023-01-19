@@ -17,7 +17,7 @@ from .utils import Rays
 _PATH = os.path.abspath(__file__)
 
 sys.path.insert(
-    0, os.path.join(os.path.dirname(_PATH), "..", "pycolmap", "pycolmap")
+    0, os.path.join(os.path.dirname(_PATH), ".", "pycolmap", "pycolmap")
 )
 from scene_manager import SceneManager
 
