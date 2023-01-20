@@ -21,14 +21,17 @@ from nerfacc import ContractionType, OccupancyGrid
 import matplotlib.pyplot as plt
 
 @torch.no_grad()
-def export_mesh(radiance_field: NGPradianceField, grid_size=[512, 512, 512], device="cuda:0", render_step_size=1e-2, save_path=None, level=0.05):
+def export_mesh(radiance_field: NGPradianceField, grid_size=[512, 512, 512], device="cuda:0", render_step_size=1e-2, save_path=None, level=0.05, aabb=None):
     samples = torch.stack(torch.meshgrid(
         torch.linspace(0, 1, grid_size[0]),
         torch.linspace(0, 1, grid_size[1]),
         torch.linspace(0, 1, grid_size[2]),
     ), -1)
-
-    dense_xyz = (1-samples)*radiance_field.aabb[:3].cpu() + samples*radiance_field.aabb[3:].cpu()
+    if aabb is None:
+        aabb = radiance_field.aabb
+    else:
+        aabb = torch.Tensor(aabb)
+    dense_xyz = (1-samples)*aabb[:3].cpu() + samples*aabb[3:].cpu()
 
     alpha = torch.zeros_like(dense_xyz[...,0], device='cpu')
     for i in tqdm(range(grid_size[0]), desc="Extracting Alpha Field"):
@@ -89,6 +92,12 @@ if __name__ == "__main__":
         "--aabb",
         type=lambda s: [float(item) for item in s.split(",")],
         default="-1.5,-1.5,-1.5,1.5,1.5,1.5",
+        help="delimited list input",
+    )
+    parser.add_argument(
+        "--extract_aabb",
+        type=lambda s: [float(item) for item in s.split(",")],
+        default=None,
         help="delimited list input",
     )
     parser.add_argument(
@@ -153,38 +162,6 @@ if __name__ == "__main__":
         train_dataset_kwargs['supersampling'] = 2
         test_dataset_kwargs['supersampling'] = 2
 
-    train_dataset = SubjectLoader(
-        subject_id=args.scene,
-        root_fp=data_root_fp,
-        split=args.train_split,
-        num_rays=target_sample_batch_size // render_n_samples,
-        **train_dataset_kwargs,
-    )
-
-    train_dataset.images = train_dataset.images.to(device)
-    train_dataset.camtoworlds = train_dataset.camtoworlds.to(device)
-    train_dataset.K = train_dataset.K.to(device)
-
-    test_dataset = SubjectLoader(
-        subject_id=args.scene,
-        root_fp=data_root_fp,
-        split="test",
-        num_rays=None,
-        **test_dataset_kwargs,
-    )
-    test_dataset.images = test_dataset.images.to(device)
-    test_dataset.camtoworlds = test_dataset.camtoworlds.to(device)
-    test_dataset.K = test_dataset.K.to(device)
-
-    if args.auto_aabb:
-        camera_locs = torch.cat(
-            [train_dataset.camtoworlds, test_dataset.camtoworlds]
-        )[:, :3, -1]
-        args.aabb = torch.cat(
-            [camera_locs.min(dim=0).values, camera_locs.max(dim=0).values]
-        ).tolist()
-        print("Using auto aabb", args.aabb)
-
     # setup the scene bounding box.
     if args.unbounded:
         print("Using unbounded rendering")
@@ -218,8 +195,41 @@ if __name__ == "__main__":
 
         # export mesh and only export mesh        
         if args.export_mesh:
-            export_mesh(radiance_field, save_path=args.load_path+"/export.ply", level=args.mesh_level, grid_size=[args.grid_size]*3)
+            export_mesh(radiance_field, save_path=args.load_path+"/export.ply", level=args.mesh_level, grid_size=[args.grid_size]*3, aabb=args.extract_aabb)
             exit()
+
+        train_dataset = SubjectLoader(
+            subject_id=args.scene,
+            root_fp=data_root_fp,
+            split=args.train_split,
+            num_rays=target_sample_batch_size // render_n_samples,
+            **train_dataset_kwargs,
+        )
+
+        train_dataset.images = train_dataset.images.to(device)
+        train_dataset.camtoworlds = train_dataset.camtoworlds.to(device)
+        train_dataset.K = train_dataset.K.to(device)
+
+        test_dataset = SubjectLoader(
+            subject_id=args.scene,
+            root_fp=data_root_fp,
+            split="test",
+            num_rays=None,
+            **test_dataset_kwargs,
+        )
+        test_dataset.images = test_dataset.images.to(device)
+        test_dataset.camtoworlds = test_dataset.camtoworlds.to(device)
+        test_dataset.K = test_dataset.K.to(device)
+
+        if args.auto_aabb:
+            camera_locs = torch.cat(
+                [train_dataset.camtoworlds, test_dataset.camtoworlds]
+            )[:, :3, -1]
+            args.aabb = torch.cat(
+                [camera_locs.min(dim=0).values, camera_locs.max(dim=0).values]
+            ).tolist()
+            print("Using auto aabb", args.aabb)
+
 
         psnrs = []
         with torch.no_grad():
@@ -270,6 +280,37 @@ if __name__ == "__main__":
 
         exit()
 
+    train_dataset = SubjectLoader(
+        subject_id=args.scene,
+        root_fp=data_root_fp,
+        split=args.train_split,
+        num_rays=target_sample_batch_size // render_n_samples,
+        **train_dataset_kwargs,
+    )
+
+    train_dataset.images = train_dataset.images.to(device)
+    train_dataset.camtoworlds = train_dataset.camtoworlds.to(device)
+    train_dataset.K = train_dataset.K.to(device)
+
+    test_dataset = SubjectLoader(
+        subject_id=args.scene,
+        root_fp=data_root_fp,
+        split="test",
+        num_rays=None,
+        **test_dataset_kwargs,
+    )
+    test_dataset.images = test_dataset.images.to(device)
+    test_dataset.camtoworlds = test_dataset.camtoworlds.to(device)
+    test_dataset.K = test_dataset.K.to(device)
+
+    if args.auto_aabb:
+        camera_locs = torch.cat(
+            [train_dataset.camtoworlds, test_dataset.camtoworlds]
+        )[:, :3, -1]
+        args.aabb = torch.cat(
+            [camera_locs.min(dim=0).values, camera_locs.max(dim=0).values]
+        ).tolist()
+        print("Using auto aabb", args.aabb)
 
     # setup the radiance field we want to train.
     max_steps = args.max_steps
@@ -386,7 +427,7 @@ if __name__ == "__main__":
                 num_rays
                 * (target_sample_batch_size / float(n_rendering_samples))
             )
-            if num_rays > 10000:
+            if num_rays > 10000 and args.unbounded:
                 num_rays = 10000
             train_dataset.update_num_rays(num_rays)
             alive_ray_mask = acc.squeeze(-1) > 0
