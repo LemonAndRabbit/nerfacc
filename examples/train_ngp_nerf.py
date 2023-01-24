@@ -15,6 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from radiance_fields.ngp import NGPradianceField
 from utils import render_image, set_random_seed, convert_sdf_samples_to_ply
+from loss import total_variation_loss
 
 from nerfacc import ContractionType, OccupancyGrid
 
@@ -85,6 +86,15 @@ if __name__ == "__main__":
             "kitchen",
             "room",
             "stump",
+            # llff
+            "fern",
+            "flower",
+            "fortress",
+            "horns",
+            "leaves",
+            "orchids",
+            "room",
+            "trex",
         ],
         help="which scene to use",
     )
@@ -111,9 +121,24 @@ if __name__ == "__main__":
         help="whether to use unbounded rendering",
     )
     parser.add_argument(
+        "--llff",
+        action="store_true",
+        help="whether to use unbounded rendering",
+    )
+    parser.add_argument(
         "--auto_aabb",
         action="store_true",
         help="whether to automatically compute the aabb",
+    )
+    parser.add_argument(
+        "--auto_aabb2",
+        action="store_true",
+        help="whether to automatically compute the aabb according new rule",
+    )
+    parser.add_argument(
+        "--boxes",
+        action="store_true",
+        help="use sky boxes for unbounded scenes",
     )
     parser.add_argument("--cone_angle", type=float, default=0.0)
     parser.add_argument("--save_path", type=str, default=None)
@@ -124,7 +149,20 @@ if __name__ == "__main__":
     parser.add_argument("--grid_size", type=int, default=512)
     parser.add_argument("--mesh_level", type=float, default=0.5)
     parser.add_argument("--distortion_loss", action="store_true", help="punish floaters and background through distortion loss")
-    parser.add_argument("--color_bkgd_aug", type=str, default="white")
+    parser.add_argument("--distortion_loss_llff", action="store_true", help="punish floaters and background through distortion loss")
+    parser.add_argument("--d_factor", type=float, default=1e-6)
+    parser.add_argument("--sparsity_loss", action="store_true", help="punish floaters and background through distortion loss")
+    parser.add_argument("--s_factor", type=float, default=1e-15)
+    parser.add_argument("--tv_loss", action="store_true", help="total variation loss")
+    parser.add_argument("--tv_level", type=int, default=12)
+    parser.add_argument("--rtv_factor", type=float, default=1e-15)
+    parser.add_argument("--dtv_factor", type=float, default=1e-15)
+    parser.add_argument("--step_scale", type=float, default=None)
+    parser.add_argument("--alpha_thres", type=float, default=0.)
+    parser.add_argument("--render_n_samples", type=int, default=2048)
+    parser.add_argument("--color_bkgd_aug", type=str, default="random")
+    parser.add_argument("--n_levels", type=int, default=16)
+    parser.add_argument("--log2_hashmap_size", type=int, default=19)
     parser.add_argument("--base_layer", type=int, default=1)
     parser.add_argument("--base_dim", type=int, default=64)
     parser.add_argument("--head_layer", type=int, default=2)
@@ -133,6 +171,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps", type=int, default=20000)
     parser.add_argument("--test_every", type=int, default=0)
     parser.add_argument("--supersampling", type=str, default=None)
+    parser.add_argument("--lr", type=float, default=1e-2)
+    parser.add_argument("--loss", type=str, default='l1')
     parser.add_argument("--swa", action="store_true")
     parser.add_argument("--swa_step", type=int, default=None)
     args = parser.parse_args()
@@ -150,6 +190,15 @@ if __name__ == "__main__":
         train_dataset_kwargs = {"color_bkgd_aug": "random", "factor": 4}
         test_dataset_kwargs = {"factor": 4}
         grid_resolution = 256
+    elif args.llff:
+        from datasets.llff import SubjectLoader
+
+        data_root_fp = "/data3/dataset_nerf/nerf_llff_data"
+        target_sample_batch_size = 1 << 19
+        grid_resolution = 128
+        train_dataset_kwargs = {"color_bkgd_aug": args.color_bkgd_aug}
+
+        render_n_samples = args.render_n_samples
     else:
         from datasets.nerf_synthetic import SubjectLoader
 
@@ -182,7 +231,8 @@ if __name__ == "__main__":
             * math.sqrt(3)
             / render_n_samples
         ).item()
-        alpha_thre = 0.0
+        print(render_step_size)
+        alpha_thre = args.alpha_thres
 
     # evaluating and only evaluating
     if args.load_path is not None:
@@ -195,7 +245,7 @@ if __name__ == "__main__":
 
         # export mesh and only export mesh        
         if args.export_mesh:
-            export_mesh(radiance_field, save_path=args.load_path+"/export.ply", level=args.mesh_level, grid_size=[args.grid_size]*3, aabb=args.extract_aabb)
+            export_mesh(radiance_field, save_path=args.load_path+"/export.ply", level=args.mesh_level, grid_size=[args.grid_size]*3, aabb=args.extract_aabb, render_step_size=render_step_size)
             exit()
 
         train_dataset = SubjectLoader(
@@ -229,6 +279,14 @@ if __name__ == "__main__":
                 [camera_locs.min(dim=0).values, camera_locs.max(dim=0).values]
             ).tolist()
             print("Using auto aabb", args.aabb)
+        elif args.auto_aabb2:
+            camera_locs = torch.cat(
+                [train_dataset.camtoworlds, test_dataset.camtoworlds]
+            )[:, :3, -1]
+            bound = camera_locs.abs().max().item()
+            args.aabb = [-bound, -bound, -bound, bound, bound, bound]
+            far_plane = 16*bound
+            print("Using auto aabb2", args.aabb)
 
 
         psnrs = []
@@ -318,6 +376,8 @@ if __name__ == "__main__":
     radiance_field = NGPradianceField(
         aabb=args.aabb,
         unbounded=args.unbounded,
+        n_levels=args.n_levels,
+        log2_hashmap_size=args.log2_hashmap_size,
         base_layer=args.base_layer,
         base_dim=args.base_dim,
         head_layer=args.head_layer,
@@ -329,12 +389,28 @@ if __name__ == "__main__":
         torch.save(radiance_field, "initial_nerf.pt")
         exit()
 
-    optimizer = torch.optim.Adam(radiance_field.parameters(), lr=1e-2, eps=1e-15)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer,
-        milestones=[max_steps // 2, max_steps * 3 // 4, max_steps * 9 // 10],
-        gamma=0.33,
-    )
+    if args.llff:
+        optimizer = torch.optim.Adam(radiance_field.parameters(), lr=args.lr, eps=1e-15)
+        if args.step_scale is None:
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[max_steps // 2],
+                gamma=1.,
+            )
+        else:
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[max_steps // 2],
+                gamma=args.step_scale,
+            )
+
+    else:
+        optimizer = torch.optim.Adam(radiance_field.parameters(), lr=args.lr, eps=1e-15)
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer,
+            milestones=[max_steps // 2, max_steps * 3 // 4, max_steps * 9 // 10],
+            gamma=0.33,
+        )
 
     if args.swa:
         swa_radiance_field = torch.optim.swa_utils.AveragedModel(radiance_field)
@@ -414,7 +490,9 @@ if __name__ == "__main__":
                 render_bkgd=render_bkgd,
                 cone_angle=args.cone_angle,
                 alpha_thre=alpha_thre,
-                distortion_loss = args.distortion_loss
+                distortion_loss = args.distortion_loss,
+                distortion_loss_llff = args.distortion_loss_llff,
+                sparsity_loss = args.sparsity_loss,
             )
             if n_rendering_samples == 0:
                 print("skipped!")
@@ -429,19 +507,45 @@ if __name__ == "__main__":
             )
             if num_rays > 10000 and args.unbounded:
                 num_rays = 10000
+            elif num_rays > 40000 and args.llff:
+                num_rays = 40000
             train_dataset.update_num_rays(num_rays)
             alive_ray_mask = acc.squeeze(-1) > 0
 
             # compute loss
-            pic_loss = F.smooth_l1_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
+            if args.loss =='l1':
+                pic_loss = F.smooth_l1_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
+            elif args.loss == 'l2':
+                pic_loss = F.mse_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
 
-            if args.distortion_loss:
+            if writer is not None:
+                writer.add_scalar('lr', scheduler.get_last_lr()[0], step)
+                writer.add_scalar('pic_loss', pic_loss, step)
+            if args.distortion_loss or args.distortion_loss_llff:
                 if args.unbounded:
-                    loss = pic_loss + extra_loss * 0.00000001
+                    pass
+                    # loss = pic_loss + extra_loss['dis_loss'] * 0.00000001 + extra_loss['s_loss'] * args.s_loss
+                elif args.llff:
+                    loss = pic_loss
+                    loss += extra_loss['dis_loss'] * args.d_factor
                 else:
-                    loss = pic_loss + extra_loss * 0.0000001
+                    loss = pic_loss + extra_loss['dis_loss'] * 0.0000001
             else:
                 loss = pic_loss
+            
+            if args.sparsity_loss:
+                loss += extra_loss['s_loss'] * args.s_factor
+
+            if args.tv_loss:
+                def embedding_func(idx):
+                    mean_rays_dirs = rays[1].mean(dim=0)[None, None, None, ...].broadcast_to(idx.shape)
+
+                    return radiance_field(idx.to(mean_rays_dirs.device), mean_rays_dirs, direct=True)
+
+                r_loss, d_loss = total_variation_loss(embedding_func, 16, 1.4472692012786865, args.tv_level)
+
+                loss += args.rtv_factor * r_loss + args.dtv_factor * d_loss
+
 
             optimizer.zero_grad()
             # do not unscale it because we are using Adam.
@@ -454,9 +558,9 @@ if __name__ == "__main__":
                 scheduler.step()
             
             if writer is not None:
-                writer.add_scalar('lr', scheduler.get_last_lr()[0], step)
+                writer.add_scalar('loss', pic_loss, step)
 
-            if step % 1 == 0:
+            if step % 5000 == 0:
                 elapsed_time = time.time() - tic
                 loss = F.mse_loss(rgb[alive_ray_mask], pixels[alive_ray_mask])
                 print(
@@ -466,6 +570,7 @@ if __name__ == "__main__":
                     f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} |"
                 )
                 writer.add_scalar('time', elapsed_time, step)
+
 
             if writer and (step+1) % args.test_every == 0:
                 writer.add_scalar('train_psnr', (-10.0 * torch.log(F.mse_loss(rgb, pixels)) / np.log(10.0)).item(), step)

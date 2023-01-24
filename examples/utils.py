@@ -10,7 +10,7 @@ import torch
 from datasets.utils import Rays, namedtuple_map
 
 from nerfacc import OccupancyGrid, ray_marching, rendering
-
+from nerfacc.vol_rendering import accumulate_along_rays
 
 def set_random_seed(seed):
     random.seed(seed)
@@ -38,6 +38,8 @@ def render_image(
     # only useful for dnerf
     timestamps: Optional[torch.Tensor] = None,
     distortion_loss: bool = False,
+    distortion_loss_llff: bool = False,
+    sparsity_loss: bool = False,
 ):
     """Render the pixels of an image."""
     rays_shape = rays.origins.shape
@@ -69,7 +71,7 @@ def render_image(
             return radiance_field.query_density(positions, t)
         return radiance_field.query_density(positions)
 
-    def rgb_sigma_fn(t_starts, t_ends, ray_indices):
+    def rgb_sigma_fn(t_starts, t_ends, ray_indices, requires_position=False):
         ray_indices = ray_indices.long()
         if supersampling:
             t_origins = chunk_rays2.origins[ray_indices]
@@ -83,7 +85,7 @@ def render_image(
             t_dirs = chunk_rays.viewdirs[ray_indices]
             positions = t_origins + t_dirs * (t_starts + t_ends) / 2.0
 
-            return radiance_field(positions, t_dirs)
+            return radiance_field(positions, t_dirs), positions
         # if timestamps is not None:
         #     # dnerf
         #     t = (
@@ -100,7 +102,11 @@ def render_image(
         if radiance_field.training
         else test_chunk_size
     )
-    extra_loss = 0
+    extra_loss = {}
+    if distortion_loss or distortion_loss_llff:
+        extra_loss['dis_loss'] = 0.
+    if sparsity_loss:
+        extra_loss['s_loss'] = 0.
 
     for i in range(0, num_rays, chunk):
         chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
@@ -121,24 +127,55 @@ def render_image(
             cone_angle=cone_angle,
             alpha_thre=alpha_thre,
         )
-        rgb, opacity, depth, weights = rendering(
+        rgb, opacity, depth, extras = rendering(
             t_starts,
             t_ends,
             ray_indices,
             n_rays=chunk_rays.origins.shape[0],
             rgb_sigma_fn=rgb_sigma_fn,
             render_bkgd=render_bkgd,
-            requires_weight=distortion_loss,
+            requires_weight=distortion_loss or distortion_loss_llff,
+            requires_sigma=sparsity_loss,
+            requires_position=distortion_loss_llff,
         )
         chunk_results = [rgb, opacity, depth, len(t_starts)]
         results.append(chunk_results)
 
+        ray_indices = ray_indices.long()
         if distortion_loss:
+            weights = extras['weight']
             with torch.no_grad():
-                dis_mids = abs((t_starts+t_ends)/2.0 - (depth/(opacity+0.001))[ray_indices.long()])
+                dis_mids = abs((t_starts+t_ends)/2.0 - (depth/(opacity+0.001))[ray_indices])
 
-            extra_loss += (weights * dis_mids).sum()
+            extra_loss['dis_loss'] += (weights * dis_mids).sum()
             # print(extra_loss)
+        elif distortion_loss_llff:
+            weights = extras['weight']
+            with torch.no_grad():
+                # dis_mids = abs((t_starts+t_ends)/2.0 - (depth/(opacity+0.001))[ray_indices.long()])
+                t_origins = chunk_rays.origins[ray_indices]
+                t_dirs = chunk_rays.viewdirs[ray_indices]
+                # print(t_origins.shape)
+                # print(t_dirs.shape)
+                # print(ray_indices.shape)
+                # print(weight.shape)
+                # exit()
+                real_positions = extras['position'][...,2:3]
+                real_positions = 1.0 / (real_positions-1)
+                real_depths = accumulate_along_rays(
+                    weights,
+                    ray_indices,
+                    values=real_positions,
+                    n_rays=chunk_rays.origins.shape[0],
+                )
+                dis_mids = abs(real_positions - real_depths[ray_indices.long()])
+                del real_positions
+                del real_depths
+            extra_loss['dis_loss'] += (weights * dis_mids).sum()
+
+        if sparsity_loss:
+            sigmas = extras['sigma']
+            extra_loss['s_loss'] += torch.log(1.0 + 2*sigmas**2).sum()
     
     colors, opacities, depths, n_rendering_samples = [
         torch.cat(r, dim=0) if isinstance(r[0], torch.Tensor) else r

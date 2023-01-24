@@ -156,12 +156,13 @@ class NGPradianceField(torch.nn.Module):
                 },
             )
 
-    def query_density(self, x, return_feat: bool = False):
-        if self.unbounded:
-            x = contract_to_unisphere(x, self.aabb)
-        else:
-            aabb_min, aabb_max = torch.split(self.aabb, self.num_dim, dim=-1)
-            x = (x - aabb_min) / (aabb_max - aabb_min)
+    def query_density(self, x, return_feat: bool = False, direct: bool = False):
+        if not direct:
+            if self.unbounded:
+                x = contract_to_unisphere(x, self.aabb)
+            else:
+                aabb_min, aabb_max = torch.split(self.aabb, self.num_dim, dim=-1)
+                x = (x - aabb_min) / (aabb_max - aabb_min)
         selector = ((x > 0.0) & (x < 1.0)).all(dim=-1)
         x = (
             self.mlp_base(x.view(-1, self.num_dim))
@@ -201,12 +202,13 @@ class NGPradianceField(torch.nn.Module):
         directions: torch.Tensor = None,
         directions_coarse: torch.Tensor = None,
         supersampling: str = None,
+        direct: bool = False,
     ):
         if self.use_viewdirs and (directions is not None):
             assert (
                 positions.shape == directions.shape
             ), f"{positions.shape} v.s. {directions.shape}"
-            density, embedding = self.query_density(positions, return_feat=True)
+            density, embedding = self.query_density(positions, return_feat=True, direct=direct)
             
             if supersampling == 'defer':
                 density = torch.mean(density, dim=-2)

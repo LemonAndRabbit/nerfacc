@@ -1,3 +1,4 @@
+import torch
 from torch import Tensor
 
 from .pack import unpack_data
@@ -30,3 +31,7 @@ def distortion(
     mm = (tmid.unsqueeze(-1) - tmid.unsqueeze(-2)).abs()
     loss_bi = (ww * mm).sum((-1, -2))
     return loss_uni + loss_bi
+
+def sigma_sparsity_loss(sigmas):
+    # Using Cauchy Sparsity loss on sigma values
+    return torch.log(1.0 + 2*sigmas**2).sum(dim=-1)

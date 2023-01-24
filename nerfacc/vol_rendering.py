@@ -24,6 +24,8 @@ def rendering(
     # rendering options
     render_bkgd: Optional[torch.Tensor] = None,
     requires_weight: bool = False,
+    requires_sigma: bool = False,
+    requires_position: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Render the rays through the radience field defined by `rgb_sigma_fn`.
 
@@ -79,7 +81,7 @@ def rendering(
 
     # Query sigma/alpha and color with gradients
     if rgb_sigma_fn is not None:
-        rgbs, sigmas = rgb_sigma_fn(t_starts, t_ends, ray_indices.long())
+        (rgbs, sigmas), positions = rgb_sigma_fn(t_starts, t_ends, ray_indices.long(), requires_position=requires_position)
         assert rgbs.shape[-1] == 3, "rgbs must have 3 channels, got {}".format(
             rgbs.shape
         )
@@ -127,10 +129,14 @@ def rendering(
     if render_bkgd is not None:
         colors = colors + render_bkgd * (1.0 - opacities)
 
+    extras = {}
     if requires_weight == True:
-        return colors, opacities, depths, weights    
-    else:
-        return colors, opacities, depths, None
+        extras['weight'] = weights
+    if requires_sigma == True:
+        extras['sigma'] = sigmas
+    if requires_position:
+        extras['position'] = positions
+    return colors, opacities, depths, extras
 
 
 def accumulate_along_rays(
