@@ -389,28 +389,12 @@ if __name__ == "__main__":
         torch.save(radiance_field, "initial_nerf.pt")
         exit()
 
-    if args.llff:
-        optimizer = torch.optim.Adam(radiance_field.parameters(), lr=args.lr, eps=1e-15)
-        if args.step_scale is None:
-            scheduler = torch.optim.lr_scheduler.MultiStepLR(
-                optimizer,
-                milestones=[max_steps // 2],
-                gamma=1.,
-            )
-        else:
-            scheduler = torch.optim.lr_scheduler.MultiStepLR(
-                optimizer,
-                milestones=[max_steps // 2],
-                gamma=args.step_scale,
-            )
-
-    else:
-        optimizer = torch.optim.Adam(radiance_field.parameters(), lr=args.lr, eps=1e-15)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer,
-            milestones=[max_steps // 2, max_steps * 3 // 4, max_steps * 9 // 10],
-            gamma=0.33,
-        )
+    optimizer = torch.optim.Adam(radiance_field.parameters(), lr=args.lr, eps=1e-15)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=[max_steps // 2, max_steps * 3 // 4, max_steps * 9 // 10],
+        gamma=0.33,
+    )
 
     if args.swa:
         swa_radiance_field = torch.optim.swa_utils.AveragedModel(radiance_field)
@@ -524,7 +508,6 @@ if __name__ == "__main__":
             if args.distortion_loss or args.distortion_loss_llff:
                 if args.unbounded:
                     pass
-                    # loss = pic_loss + extra_loss['dis_loss'] * 0.00000001 + extra_loss['s_loss'] * args.s_loss
                 elif args.llff:
                     loss = pic_loss
                     loss += extra_loss['dis_loss'] * args.d_factor
