@@ -80,6 +80,7 @@ class SubjectLoader(torch.utils.data.Dataset):
         far: float = None,
         batch_over_images: bool = True,
         supersampling = 1.,
+        training_ratio = 1.,
     ):
         super().__init__()
         assert split in self.SPLITS, "%s" % split
@@ -95,6 +96,7 @@ class SubjectLoader(torch.utils.data.Dataset):
         self.color_bkgd_aug = color_bkgd_aug
         self.batch_over_images = batch_over_images
         self.supersampling = supersampling
+        self.training_ratio = training_ratio
         if split == "trainval":
             _images_train, _camtoworlds_train, _focal_train = _load_renderings(
                 root_fp, subject_id, "train"
@@ -165,9 +167,13 @@ class SubjectLoader(torch.utils.data.Dataset):
 
         if self.training:
             if self.batch_over_images:
+                if self.training_ratio != 1.:
+                    max_index = int(self.training_ratio * len(self.images))
+                else:
+                    max_index = len(self.images)
                 image_id = torch.randint(
                     0,
-                    len(self.images),
+                    max_index,
                     size=(num_rays,),
                     device=self.images.device,
                 )

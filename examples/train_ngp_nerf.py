@@ -99,6 +99,11 @@ if __name__ == "__main__":
         help="which scene to use",
     )
     parser.add_argument(
+        "--training_ratio",
+        type=float,
+        default=1.,
+    )
+    parser.add_argument(
         "--aabb",
         type=lambda s: [float(item) for item in s.split(",")],
         default="-1.5,-1.5,-1.5,1.5,1.5,1.5",
@@ -253,6 +258,7 @@ if __name__ == "__main__":
             root_fp=data_root_fp,
             split=args.train_split,
             num_rays=target_sample_batch_size // render_n_samples,
+            training_ratio=args.training_ratio,
             **train_dataset_kwargs,
         )
 
@@ -343,6 +349,7 @@ if __name__ == "__main__":
         root_fp=data_root_fp,
         split=args.train_split,
         num_rays=target_sample_batch_size // render_n_samples,
+        training_ratio=args.training_ratio,
         **train_dataset_kwargs,
     )
 
