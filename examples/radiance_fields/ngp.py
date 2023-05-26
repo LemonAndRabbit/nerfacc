@@ -80,6 +80,8 @@ class NGPradianceField(torch.nn.Module):
         geo_feat_dim: int = 15,
         n_levels: int = 16,
         log2_hashmap_size: int = 19,
+        base_dim: int = 64,
+        base_layer:int = 1,
         head_dim: int = 64,
         head_layer: int = 2,
     ) -> None:
@@ -91,6 +93,8 @@ class NGPradianceField(torch.nn.Module):
         self.use_viewdirs = use_viewdirs
         self.density_activation = density_activation
         self.unbounded = unbounded
+        self.base_dim = base_dim
+        self.base_layer = base_layer
         self.head_dim = head_dim
         self.head_layer = head_layer
 
@@ -128,8 +132,8 @@ class NGPradianceField(torch.nn.Module):
                 "otype": "FullyFusedMLP",
                 "activation": "ReLU",
                 "output_activation": "None",
-                "n_neurons": 64,
-                "n_hidden_layers": 1,
+                "n_neurons": self.base_dim,
+                "n_hidden_layers": self.base_layer,
             },
         )
         if self.geo_feat_dim > 0:

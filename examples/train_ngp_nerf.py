@@ -135,7 +135,7 @@ if __name__ == "__main__":
     else:
         from datasets.nerf_synthetic import SubjectLoader
 
-        data_root_fp = "/data3/dataset_nerf/nerf_synthetic"
+        data_root_fp = "/data1/dataset_nerf/nerf_synthetic"
         target_sample_batch_size = 1 << 18
         grid_resolution = 128
         train_dataset_kwargs = {"color_bkgd_aug": args.color_bkgd_aug}
