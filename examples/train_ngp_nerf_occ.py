@@ -2,6 +2,7 @@
 Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
 
+import os
 import argparse
 import math
 import pathlib
@@ -24,6 +25,11 @@ from examples.utils import (
 )
 from nerfacc.estimators.occ_grid import OccGridEstimator
 
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--data_root",
@@ -31,6 +37,13 @@ parser.add_argument(
     # default=str(pathlib.Path.cwd() / "data/360_v2"),
     default=str(pathlib.Path.cwd() / "data/nerf_synthetic"),
     help="the root dir of the dataset",
+)
+parser.add_argument(
+    "--ckpt_path",
+    type=str,
+    # default=str(pathlib.Path.cwd() / "data/360_v2"),
+    default=str(pathlib.Path.cwd() / "temp_ckpt"),
+    help="the root dir of the ckpts",
 )
 parser.add_argument(
     "--train_split",
@@ -45,6 +58,11 @@ parser.add_argument(
     default="lego",
     choices=NERF_SYNTHETIC_SCENES + MIPNERF360_UNBOUNDED_SCENES,
     help="which scene to use",
+)
+parser.add_argument("--color_bkgd_aug", 
+                    type=str, 
+                    default="white",
+                    choices=["random", "black", "white"],
 )
 args = parser.parse_args()
 
@@ -64,7 +82,7 @@ if args.scene in MIPNERF360_UNBOUNDED_SCENES:
     near_plane = 0.2
     far_plane = 1.0e10
     # dataset parameters
-    train_dataset_kwargs = {"color_bkgd_aug": "random", "factor": 4}
+    train_dataset_kwargs = {"color_bkgd_aug": args.color_bkgd_aug, "factor": 4}
     test_dataset_kwargs = {"factor": 4}
     # model parameters
     grid_resolution = 128
@@ -89,7 +107,7 @@ else:
     near_plane = 0.0
     far_plane = 1.0e10
     # dataset parameters
-    train_dataset_kwargs = {}
+    train_dataset_kwargs = {"color_bkgd_aug": args.color_bkgd_aug}
     test_dataset_kwargs = {}
     # model parameters
     grid_resolution = 128
@@ -147,6 +165,14 @@ lpips_net = LPIPS(net="vgg").to(device)
 lpips_norm_fn = lambda x: x[None, ...].permute(0, 3, 1, 2) * 2 - 1
 lpips_fn = lambda x, y: lpips_net(lpips_norm_fn(x), lpips_norm_fn(y)).mean()
 
+os.makedirs(args.ckpt_path, exist_ok=True)
+
+file_handler = logging.FileHandler(args.ckpt_path + "/train.log")
+file_handler.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+
+logger.info(f"args: {args}")
+
 # training
 tic = time.time()
 for step in range(max_steps + 1):
@@ -203,11 +229,17 @@ for step in range(max_steps + 1):
     optimizer.step()
     scheduler.step()
 
-    if step % 10000 == 0:
+    if step % 10000 == 0 or step == max_steps:
         elapsed_time = time.time() - tic
         loss = F.mse_loss(rgb, pixels)
         psnr = -10.0 * torch.log(loss) / np.log(10.0)
-        print(
+        # print(
+        #     f"elapsed_time={elapsed_time:.2f}s | step={step} | "
+        #     f"loss={loss:.5f} | psnr={psnr:.2f} | "
+        #     f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} | "
+        #     f"max_depth={depth.max():.3f} | "
+        # )
+        logger.info(
             f"elapsed_time={elapsed_time:.2f}s | step={step} | "
             f"loss={loss:.5f} | psnr={psnr:.2f} | "
             f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} | "
@@ -259,4 +291,8 @@ for step in range(max_steps + 1):
                 #     )
         psnr_avg = sum(psnrs) / len(psnrs)
         lpips_avg = sum(lpips) / len(lpips)
-        print(f"evaluation: psnr_avg={psnr_avg}, lpips_avg={lpips_avg}")
+        # print(f"evaluation: psnr_avg={psnr_avg}, lpips_avg={lpips_avg}")
+        logger.info(f"evaluation: psnr_avg={psnr_avg}, lpips_avg={lpips_avg}")
+
+        torch.save(radiance_field.state_dict(), args.ckpt_path + f"/field_state_dict.pt")
+        torch.save(estimator.state_dict(), args.ckpt_path + f"/estimator_state_dict.pt")

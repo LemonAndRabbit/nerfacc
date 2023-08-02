@@ -125,3 +125,6 @@ benchmarks/*
 !benchmarks/kplanes
 !benchmarks/tensorf
 !benchmarks/tineuvox
+
+# zhifan
+ckpt/
