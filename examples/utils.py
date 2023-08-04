@@ -67,6 +67,7 @@ def render_image_with_occgrid(
     test_chunk_size: int = 8192,
     # only useful for dnerf
     timestamps: Optional[torch.Tensor] = None,
+    centering_loss: bool = False,
 ):
     """Render the pixels of an image."""
     rays_shape = rays.origins.shape
@@ -117,6 +118,9 @@ def render_image_with_occgrid(
         if radiance_field.training
         else test_chunk_size
     )
+    extra_output = {}
+    if centering_loss:
+        extra_output["centering_loss"] = 0.
     for i in range(0, num_rays, chunk):
         chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
         ray_indices, t_starts, t_ends = estimator.sampling(
@@ -140,6 +144,15 @@ def render_image_with_occgrid(
         )
         chunk_results = [rgb, opacity, depth, len(t_starts)]
         results.append(chunk_results)
+
+        ray_indices = ray_indices.long()
+        if centering_loss:
+            weights = extras['weights']
+            with torch.no_grad():
+                dis_mids = abs((t_starts+t_ends)/2.0 - depth[ray_indices, 0])
+
+            extra_output['centering_loss'] += (weights * dis_mids).sum()
+
     colors, opacities, depths, n_rendering_samples = [
         torch.cat(r, dim=0) if isinstance(r[0], torch.Tensor) else r
         for r in zip(*results)
@@ -149,6 +162,7 @@ def render_image_with_occgrid(
         opacities.view((*rays_shape[:-1], -1)),
         depths.view((*rays_shape[:-1], -1)),
         sum(n_rendering_samples),
+        extra_output,
     )
 
 

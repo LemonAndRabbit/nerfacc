@@ -59,12 +59,44 @@ parser.add_argument(
     choices=NERF_SYNTHETIC_SCENES + MIPNERF360_UNBOUNDED_SCENES,
     help="which scene to use",
 )
-parser.add_argument("--color_bkgd_aug", 
-                    type=str, 
-                    default="white",
-                    choices=["random", "black", "white"],
+parser.add_argument(
+    "--max_steps", 
+    type=int, 
+    default=20000,
 )
+parser.add_argument(
+    "--color_bkgd_aug", 
+    type=str, 
+    default="white",
+    choices=["random", "black", "white"],
+)
+parser.add_argument(
+    "--centering_loss", 
+    action="store_true", 
+    help="punish floaters and background through centering loss"
+)
+parser.add_argument(
+    "--weight_decay",
+    type=float,
+    default=None,
+    help="weight_decay_factor",
+)
+parser.add_argument(
+    "--n_levels",
+    type=int,
+    default=16,
+    help="number of hash levels",
+)
+parser.add_argument(
+    "--hashmap_size",
+    type=int,
+    default=19,
+    help="hashmap size for each level",
+)
+
 args = parser.parse_args()
+
+max_steps = args.max_steps
 
 device = "cuda:0"
 set_random_seed(42)
@@ -73,7 +105,6 @@ if args.scene in MIPNERF360_UNBOUNDED_SCENES:
     from datasets.nerf_360_v2 import SubjectLoader
 
     # training parameters
-    max_steps = 20000
     init_batch_size = 1024
     target_sample_batch_size = 1 << 18
     weight_decay = 0.0
@@ -96,7 +127,6 @@ else:
     from datasets.nerf_synthetic import SubjectLoader
 
     # training parameters
-    max_steps = 20000
     init_batch_size = 1024
     target_sample_batch_size = 1 << 18
     weight_decay = (
@@ -116,6 +146,9 @@ else:
     render_step_size = 5e-3
     alpha_thre = 0.0
     cone_angle = 0.0
+
+if args.weight_decay is not None:
+    weight_decay = args.weight_decay
 
 train_dataset = SubjectLoader(
     subject_id=args.scene,
@@ -141,7 +174,12 @@ estimator = OccGridEstimator(
 
 # setup the radiance field we want to train.
 grad_scaler = torch.cuda.amp.GradScaler(2**10)
-radiance_field = NGPRadianceField(aabb=estimator.aabbs[-1]).to(device)
+radiance_field = NGPRadianceField(
+    aabb=estimator.aabbs[-1],
+    n_levels=args.n_levels,
+    log2_hashmap_size=args.hashmap_size
+).to(device)
+
 optimizer = torch.optim.Adam(
     radiance_field.parameters(), lr=1e-2, eps=1e-15, weight_decay=weight_decay
 )
@@ -198,7 +236,7 @@ for step in range(max_steps + 1):
     )
 
     # render
-    rgb, acc, depth, n_rendering_samples = render_image_with_occgrid(
+    rgb, acc, depth, n_rendering_samples, extra_output = render_image_with_occgrid(
         radiance_field,
         estimator,
         rays,
@@ -208,6 +246,7 @@ for step in range(max_steps + 1):
         render_bkgd=render_bkgd,
         cone_angle=cone_angle,
         alpha_thre=alpha_thre,
+        centering_loss=args.centering_loss,
     )
     if n_rendering_samples == 0:
         continue
@@ -222,6 +261,8 @@ for step in range(max_steps + 1):
 
     # compute loss
     loss = F.smooth_l1_loss(rgb, pixels)
+    if args.centering_loss:
+        loss += extra_output["centering_loss"] * 0.0000001
 
     optimizer.zero_grad()
     # do not unscale it because we are using Adam.

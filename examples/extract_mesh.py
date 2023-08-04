@@ -80,6 +80,18 @@ if __name__ == "__main__":
         help="which scene to use",
     )
     parser.add_argument(
+        "--n_levels",
+        type=int,
+        default=16,
+        help="number of hash levels",
+    )
+    parser.add_argument(
+        "--hashmap_size",
+        type=int,
+        default=19,
+        help="hashmap size for each level",
+    )
+    parser.add_argument(
         "--extract_aabb",
         type=lambda s: [float(item) for item in s.split(",")],
         default=None,
@@ -153,7 +165,11 @@ if __name__ == "__main__":
         roi_aabb=aabb, resolution=grid_resolution, levels=grid_nlvl
     ).to(device)
 
-    radiance_field = NGPRadianceField(aabb=estimator.aabbs[-1]).to(device)
+    radiance_field = NGPRadianceField(
+        aabb=estimator.aabbs[-1],
+        n_levels=args.n_levels,
+        log2_hashmap_size=args.hashmap_size
+    ).to(device)
 
     # evaluating and only evaluating
     estimator_state_dict = torch.load(args.load_path + "/estimator_state_dict.pt")

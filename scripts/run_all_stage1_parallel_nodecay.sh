@@ -2,7 +2,7 @@
 
 data_root=/data/zhifan/data/nerf_synthetic/
 single=true
-tag=vanilla_random_bg_0.1_center_loss_e35k
+tag=vanilla_random_bg_0.1_center_loss_e35k_nodecay
 
 # Deal with gpu's. If passed in, use those.
 GPU_IDX=("$@")
@@ -49,6 +49,7 @@ for scene in "${DATASETS[@]}"; do
         --color_bkgd_aug random \
         --centering_loss \
         --max_steps 35000 \
+        --weight_decay 0 \
         --ckpt_path ${dir}/${scene} & GPU_PID[$idx]=$!
     echo "Launched ${scene} on gpu ${GPU_IDX[$idx]}, ${tag}"
     

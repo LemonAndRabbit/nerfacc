@@ -81,6 +81,7 @@ class NGPRadianceField(torch.nn.Module):
         geo_feat_dim: int = 15,
         n_levels: int = 16,
         log2_hashmap_size: int = 19,
+        fix_scale: bool = True,
     ) -> None:
         super().__init__()
         if not isinstance(aabb, torch.Tensor):
@@ -95,10 +96,16 @@ class NGPRadianceField(torch.nn.Module):
         self.geo_feat_dim = geo_feat_dim
         self.n_levels = n_levels
         self.log2_hashmap_size = log2_hashmap_size
+        self.fix_scale = fix_scale
 
-        per_level_scale = np.exp(
-            (np.log(max_resolution) - np.log(base_resolution)) / (n_levels - 1)
-        ).tolist()
+        # TODO: is a fixed hash level scale better or fixed max resolution better?
+        # Currently, we use a fixed hash level scale.
+        if self.fix_scale:
+            per_level_scale = 1.4472692012786865
+        else:
+            per_level_scale = np.exp(
+                (np.log(max_resolution) - np.log(base_resolution)) / (n_levels - 1)
+            ).tolist()
 
         if self.use_viewdirs:
             self.direction_encoding = tcnn.Encoding(
