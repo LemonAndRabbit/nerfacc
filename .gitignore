@@ -127,4 +127,4 @@ benchmarks/*
 !benchmarks/tineuvox
 
 # zhifan
-ckpt/
+ckpt*/

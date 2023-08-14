@@ -34,6 +34,23 @@ NERF_SYNTHETIC_SCENES = [
     "mic",
     "ship",
 ]
+NSVF_SYNTHETIC_SCENES = [
+    "Wineholder",
+    "Steamtrain",
+    "Spaceship",
+    "Palace",
+    "Bike",
+    "Robot",
+    "Lifestyle",
+    "Toad",
+]
+TANKSANDTEMPLES_SCENES = [
+    "Barn",
+    "Caterpillar",
+    "Family",
+    "Ignatius",
+    "Truck",
+]
 MIPNERF360_UNBOUNDED_SCENES = [
     "garden",
     "bicycle",

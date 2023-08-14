@@ -12,13 +12,15 @@ import imageio
 import numpy as np
 import torch
 import torch.nn.functional as F
-import tqdm
+from tqdm import tqdm
 from lpips import LPIPS
 from radiance_fields.ngp import NGPRadianceField
 
 from examples.utils import (
     MIPNERF360_UNBOUNDED_SCENES,
     NERF_SYNTHETIC_SCENES,
+    NSVF_SYNTHETIC_SCENES,
+    TANKSANDTEMPLES_SCENES,
     render_image_with_occgrid,
     render_image_with_occgrid_test,
     set_random_seed,
@@ -56,7 +58,7 @@ parser.add_argument(
     "--scene",
     type=str,
     default="lego",
-    choices=NERF_SYNTHETIC_SCENES + MIPNERF360_UNBOUNDED_SCENES,
+    choices=NERF_SYNTHETIC_SCENES + NSVF_SYNTHETIC_SCENES + TANKSANDTEMPLES_SCENES,
     help="which scene to use",
 )
 parser.add_argument(
@@ -93,6 +95,22 @@ parser.add_argument(
     default=19,
     help="hashmap size for each level",
 )
+parser.add_argument(
+    "--use_dataset_bbox",
+    action="store_true",
+    help="use dataset bbox",
+)
+parser.add_argument(
+    "--adjust_step_size",
+    action="store_true",
+    help="adjust step size",
+)
+parser.add_argument(
+    "--lr",
+    type=float,
+    default=1e-2,
+    help="learning rate",
+)
 
 args = parser.parse_args()
 
@@ -123,7 +141,7 @@ if args.scene in MIPNERF360_UNBOUNDED_SCENES:
     alpha_thre = 1e-2
     cone_angle = 0.004
 
-else:
+elif args.scene in NERF_SYNTHETIC_SCENES:
     from datasets.nerf_synthetic import SubjectLoader
 
     # training parameters
@@ -146,6 +164,52 @@ else:
     render_step_size = 5e-3
     alpha_thre = 0.0
     cone_angle = 0.0
+elif args.scene in NSVF_SYNTHETIC_SCENES:
+    from datasets.nsvf_synthetic import SubjectLoader
+
+    init_batch_size = 1024
+    target_sample_batch_size = 1 << 18
+    weight_decay = 1e-5
+    # scene parameters
+    aabb = torch.tensor([-1, -1, -1, 1, 1, 1], device=device)
+    near_plane = 0.0
+    far_plane = 1.0e10
+    # dataset parameters
+    if args.scene in ["Lifestyle", "Spaceship", "Steamtrain"]:
+        args.color_bkgd_aug = "white"
+    if args.scene == "Steamtrain":
+        args.lr = 1e-3
+    train_dataset_kwargs = {"color_bkgd_aug": args.color_bkgd_aug}
+    test_dataset_kwargs = {}
+    # model parameters
+    grid_resolution = 128
+    grid_nlvl = 1
+    # render parameters
+    render_step_size = 5e-3
+    alpha_thre = 0.0
+    cone_angle = 0.0
+elif args.scene in TANKSANDTEMPLES_SCENES:
+    from datasets.tanksandtemples import SubjectLoader
+    init_batch_size = 1024
+    target_sample_batch_size = 1 << 18
+    weight_decay = 1e-5
+    # scene parameters
+    aabb = torch.tensor([-1, -1, -1, 1, 1, 1] , device=device) * 2.3
+    near_plane = 0.0
+    far_plane = 1.0e10
+    # dataset parameters
+    if args.scene != "Ignatius":
+        args.color_bkgd_aug = "white"
+    train_dataset_kwargs = {"color_bkgd_aug": args.color_bkgd_aug}
+    test_dataset_kwargs = {}
+    # model parameters
+    grid_resolution = 128
+    grid_nlvl = 1
+    # render parameters
+    render_step_size = 5e-3
+    alpha_thre = 0.0
+    cone_angle = 0.0
+
 
 if args.weight_decay is not None:
     weight_decay = args.weight_decay
@@ -168,6 +232,19 @@ test_dataset = SubjectLoader(
     **test_dataset_kwargs,
 )
 
+if hasattr(train_dataset, "bbox") and args.use_dataset_bbox:
+    print(train_dataset.bbox)
+    aabb = torch.from_numpy(train_dataset.bbox).to(device=aabb.device)
+
+if args.adjust_step_size:
+    render_step_size = (
+        (aabb[3:] - aabb[:3]).max()
+        * math.sqrt(3)
+        / init_batch_size
+    ).item()
+    print(aabb, (aabb[3:] - aabb[:3]).max() * math.sqrt(3))
+    print("render_step_size:", render_step_size)
+
 estimator = OccGridEstimator(
     roi_aabb=aabb, resolution=grid_resolution, levels=grid_nlvl
 ).to(device)
@@ -181,7 +258,7 @@ radiance_field = NGPRadianceField(
 ).to(device)
 
 optimizer = torch.optim.Adam(
-    radiance_field.parameters(), lr=1e-2, eps=1e-15, weight_decay=weight_decay
+    radiance_field.parameters(), lr=args.lr, eps=1e-15, weight_decay=weight_decay
 )
 scheduler = torch.optim.lr_scheduler.ChainedScheduler(
     [
@@ -213,7 +290,7 @@ logger.info(f"args: {args}")
 
 # training
 tic = time.time()
-for step in range(max_steps + 1):
+for step in tqdm(range(max_steps + 1)):
     radiance_field.train()
     estimator.train()
 
@@ -295,7 +372,7 @@ for step in range(max_steps + 1):
         psnrs = []
         lpips = []
         with torch.no_grad():
-            for i in tqdm.tqdm(range(len(test_dataset))):
+            for i in tqdm(range(len(test_dataset))):
                 data = test_dataset[i]
                 render_bkgd = data["color_bkgd"]
                 rays = data["rays"]

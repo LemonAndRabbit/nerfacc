@@ -19,6 +19,8 @@ from radiance_fields.ngp import NGPRadianceField
 from examples.utils import (
     MIPNERF360_UNBOUNDED_SCENES,
     NERF_SYNTHETIC_SCENES,
+    NSVF_SYNTHETIC_SCENES,
+    TANKSANDTEMPLES_SCENES,
     render_image_with_occgrid,
     render_image_with_occgrid_test,
     set_random_seed,
@@ -76,7 +78,7 @@ if __name__ == "__main__":
         "--scene",
         type=str,
         default="lego",
-        choices=NERF_SYNTHETIC_SCENES + MIPNERF360_UNBOUNDED_SCENES,
+        choices=NERF_SYNTHETIC_SCENES + NSVF_SYNTHETIC_SCENES + TANKSANDTEMPLES_SCENES,
         help="which scene to use",
     )
     parser.add_argument(
@@ -135,7 +137,6 @@ if __name__ == "__main__":
         render_step_size = 1e-3
         # alpha_thre = 1e-2
         # cone_angle = 0.004
-
     else:
         # from datasets.nerf_synthetic import SubjectLoader
 
@@ -147,7 +148,7 @@ if __name__ == "__main__":
         #     1e-5 if args.scene in ["materials", "ficus", "drums"] else 1e-6
         # )
         # scene parameters
-        aabb = torch.tensor([-1.5, -1.5, -1.5, 1.5, 1.5, 1.5], device=device)
+        # aabb = torch.tensor([-1.5, -1.5, -1.5, 1.5, 1.5, 1.5], device=device)
         # near_plane = 0.0
         # far_plane = 1.0e10
         # # dataset parameters
@@ -161,6 +162,11 @@ if __name__ == "__main__":
         # alpha_thre = 0.0
         # cone_angle = 0.0
 
+    estimator_state_dict = torch.load(args.load_path + "/estimator_state_dict.pt", map_location=device)
+    field_state_dict = torch.load(args.load_path + "/field_state_dict.pt", map_location=device)
+
+    aabb = estimator_state_dict["aabbs"][-1]
+
     estimator = OccGridEstimator(
         roi_aabb=aabb, resolution=grid_resolution, levels=grid_nlvl
     ).to(device)
@@ -172,8 +178,6 @@ if __name__ == "__main__":
     ).to(device)
 
     # evaluating and only evaluating
-    estimator_state_dict = torch.load(args.load_path + "/estimator_state_dict.pt")
-    field_state_dict = torch.load(args.load_path + "/field_state_dict.pt")
     estimator.load_state_dict(estimator_state_dict) 
     radiance_field.load_state_dict(field_state_dict)
 
