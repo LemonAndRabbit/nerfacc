@@ -6,9 +6,9 @@ tag=random_0.2_ndecay_closs_35k
 
 set -x
 
-for n_level in 12 14 16
+for n_level in 12
 do
-    for hashmap_size in 17 18 19
+    for hashmap_size in 18
     do
         for scene in chair drums ficus hotdog lego materials mic ship
         do
